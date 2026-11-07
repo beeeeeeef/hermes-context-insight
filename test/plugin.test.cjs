@@ -197,6 +197,29 @@ const breakdown = {
   assert.equal(live.kind, 'live')
   assert.equal(live.value, '255K')
   assert.equal(live.hint, 'in 126K · out 3.1K')
+  assert.equal(sandbox.categoryColor('system_prompt', 0), '#3b6fd4')
+  assert.equal(sandbox.categoryColor('conversation', 3), '#1f9d63')
+  assert.equal(sandbox.categoryColor('unknown_thing', 0), '#0e9aa7', 'unknown ids fall back to the palette')
+  assert.notEqual(sandbox.categoryColor('system_prompt', 0), sandbox.categoryColor('tool_definitions', 1), 'categories keep distinct colours')
+
+  // Two scales: the window bar must stay small when occupancy is small, while
+  // the classified bar normalises so small categories remain visible.
+  const bars = sandbox.compositionBars({
+    categories: [
+      { id: 'system_prompt', label: 'S', tokens: 6300 },
+      { id: 'conversation', label: 'C', tokens: 122000 }
+    ],
+    categoryTotal: 128300,
+    contextUsed: 121000,
+    contextMax: 1050000
+  })
+  const windowWidths = bars.windowBar.props.children.map(segment => Number.parseFloat(segment.props.style.width))
+  assert.ok(Math.abs(windowWidths[1] - 11.619) < 0.01, `window bar conversation ${windowWidths[1]} should be ~11.6%`)
+  assert.ok(windowWidths[0] + windowWidths[1] < 20, 'a small window occupancy must not fill the bar')
+  const classifiedWidths = bars.classifiedBar.props.children.map(segment => Number.parseFloat(segment.props.style.width))
+  assert.ok(classifiedWidths[0] > 4, `classified bar must keep system prompt visible, got ${classifiedWidths[0]}%`)
+  assert.ok(Math.abs(classifiedWidths[0] + classifiedWidths[1] - 100) < 0.01, 'classified bar fills its own scale')
+  assert.equal(sandbox.compositionBars({ categories: [], categoryTotal: 0, contextUsed: null, contextMax: null }), null)
 
   console.log('PASS context-insight: model, category denominator, failure state')
 })().catch(error => { console.error(error); process.exitCode = 1 })

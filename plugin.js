@@ -87,6 +87,60 @@ function Metric({ label, value, hint }) {
   })
 }
 
+/**
+ * Fixed semantic colours per category id. Stable across sessions on purpose:
+ * the bar is read by colour, so a category must not change colour because the
+ * theme changed. Unknown ids cycle through the same palette.
+ */
+const CATEGORY_COLORS = {
+  system_prompt: '#3b6fd4',
+  tool_definitions: '#e08a1e',
+  subagent_definitions: '#8b5cf6',
+  memory: '#d6457f',
+  conversation: '#1f9d63'
+}
+const EXTRA_COLORS = ['#0e9aa7', '#7c8a3f', '#b04b3f']
+
+function categoryColor(id, index) {
+  if (CATEGORY_COLORS[id]) return CATEGORY_COLORS[id]
+  return EXTRA_COLORS[index % EXTRA_COLORS.length]
+}
+
+/**
+ * Two bars, because one scale cannot answer both questions:
+ *  - window bar: how full is the window (small categories collapse to slivers);
+ *  - composition bar: what fills the classified part, where small categories
+ *    stay readable.
+ */
+function compositionBars(model) {
+  if (!model || model.categories.length === 0) return null
+  const windowScale = model.contextMax !== null && model.contextMax > 0
+    ? model.contextMax
+    : model.contextUsed !== null && model.contextUsed > 0 ? model.contextUsed : null
+  const classifiedScale = model.categoryTotal > 0 ? model.categoryTotal : null
+  if (windowScale === null && classifiedScale === null) return null
+
+  const row = (scale, label) => jsx('div', {
+    className: 'flex h-2 w-full overflow-hidden rounded-sm bg-(--ui-stroke-secondary)',
+    'aria-label': label,
+    children: model.categories.map((item, index) => jsx('div', {
+      className: 'h-full',
+      style: {
+        width: `${scale === null || item.tokens === null ? 0 : Math.min(100, (item.tokens / scale) * 100)}%`,
+        backgroundColor: categoryColor(item.id, index)
+      },
+      title: `${item.label} ${formatTokens(item.tokens)} of ${formatTokens(scale)}`
+    }, item.id))
+  })
+
+  return {
+    windowScale,
+    classifiedScale,
+    windowBar: windowScale === null ? null : row(windowScale, 'Estimated share of the context window'),
+    classifiedBar: classifiedScale === null ? null : row(classifiedScale, 'Estimated share of classified content')
+  }
+}
+
 function Section({ title, subtitle, children, className }) {
   return jsxs('section', {
     className: `rounded-md border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-2.5 ${className ?? ''}`,
@@ -282,6 +336,7 @@ function ContextPanel() {
     cumulativeOutput,
     cumulativeApprox
   })
+  const bars = compositionBars(shown)
 
   if (!sessionId) {
     return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: [
@@ -293,23 +348,40 @@ function ContextPanel() {
   return jsxs('div', { className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-2 text-(--ui-text-primary)', children: [
     jsx('div', { className: 'text-sm font-semibold', children: 'Context Insight' }),
     jsx('p', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.' }),
-    jsx(Section, { title: 'Session totals', children: jsxs('div', { className: 'grid grid-cols-2 gap-2', children: [
-      jsx(Metric, {
-        label: cumulative.kind === 'approx' ? 'Cumulative tokens (approx.)' : 'Cumulative tokens',
-        value: cumulative.value,
-        hint: cumulative.hint || undefined
-      }),
-      jsx(Metric, { label: 'Elapsed (natural)', value: shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), hint: shown === null ? 'Loading…' : shown.elapsedKnown ? undefined : 'Start time unavailable' })
-    ] }) }),
-    jsx(Section, { title: 'Current window', children: jsxs('div', { className: 'grid grid-cols-2 gap-2', children: [
-      jsx(Metric, { label: 'Window occupancy', value: shown === null || shown.windowPercent === null ? '—' : `${shown.windowPercent}%` }),
-      jsx(Metric, {
-        label: 'Used / capacity',
-        value: shown === null || shown.contextUsed === null || shown.contextMax === null
-          ? '—'
-          : `${formatTokens(shown.contextUsed)} / ${formatTokens(shown.contextMax)}`,
-        hint: shown !== null && (shown.contextUsed === null || shown.contextMax === null) ? 'Not measured before the model builds context' : undefined
-      })
+    jsx('div', {
+      className: 'flex flex-wrap items-baseline gap-x-1.5 text-[0.6875rem] text-(--ui-text-tertiary)',
+      children: [
+        jsx('span', { className: 'text-(--ui-text-secondary)', children: cumulative.value }),
+        jsx('span', { children: 'cumulative' }),
+        jsx('span', { 'aria-hidden': true, children: '·' }),
+        jsx('span', { className: 'text-(--ui-text-secondary)', children: shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)) }),
+        jsx('span', { children: 'elapsed' })
+      ]
+    }),
+    jsx(Section, { title: 'Current window', children: jsxs('div', { className: 'flex flex-col gap-2', children: [
+      jsxs('div', { className: 'flex items-baseline justify-between gap-2', children: [
+        jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5', children: [
+          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Tokens used' }),
+          jsx('span', { className: 'text-[1.25rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.contextUsed === null
+            ? '—'
+            : `${formatTokens(shown.contextUsed)} / ${shown.contextMax === null ? '—' : formatTokens(shown.contextMax)}` })
+        ] }),
+        jsxs('div', { className: 'flex shrink-0 flex-col items-end gap-0.5', children: [
+          jsx('span', { className: 'text-[1.25rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.windowPercent === null ? '—' : `${shown.windowPercent}%` }),
+          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'of window' })
+        ] })
+      ] }),
+      shown !== null && (shown.contextUsed === null || shown.contextMax === null)
+        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Not measured before the model builds context.' })
+        : null,
+      shown !== null && shown.categories.length > 0 && bars !== null && bars.windowBar
+        ? bars.windowBar
+        : null,
+      shown !== null && shown.categories.length > 0
+        ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: bars === null || bars.windowBar === null
+          ? 'Window size unavailable; bar shows classified content only.'
+          : 'Top bar = occupancy of the window. Grey = unclassified and free.' })
+        : null
     ] }) }),
     jsx(Section, {
       title: 'Estimated composition',
@@ -322,16 +394,26 @@ function ContextPanel() {
             ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Context not built yet — send a message first.' })
             : jsxs('div', { className: 'flex flex-col gap-1.5', children: [
               jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.contextUsed === null || shown.contextMax === null
-                ? `Current occupancy unavailable · classified estimate ${formatTokens(shown.categoryTotal)}`
-                : `${formatTokens(shown.contextUsed)} / ${formatTokens(shown.contextMax)} tokens · classified estimate ${formatTokens(shown.categoryTotal)}` }),
-              shown.categories.map(item => jsxs('div', { className: 'flex flex-col gap-1 pb-1', children: [
-                jsxs('div', { className: 'flex items-baseline justify-between gap-2 text-[0.75rem]', children: [
-                  jsx('span', { className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
-                  jsx('span', { className: 'shrink-0 tabular-nums text-(--ui-text-tertiary)', children: `${formatTokens(item.tokens)} · ${item.share === null ? '—' : `${item.share}%`}` })
-                ] }),
-                jsx('div', { className: 'h-1 w-full overflow-hidden rounded-full bg-(--ui-stroke-secondary)', children: jsx('div', { className: 'h-full rounded-full bg-(--ui-accent)', style: { width: `${item.share === null ? 0 : item.share}%` } }) })
-              ] })),
-              jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: 'Category shares use the classified estimate. This estimate may differ from window occupancy.' })
+                ? `Classified estimate ${formatTokens(shown.categoryTotal)} · occupancy unavailable`
+                : `Classified estimate ${formatTokens(shown.categoryTotal)}` }),
+              bars !== null && bars.classifiedBar
+                ? jsxs('div', { className: 'flex flex-col gap-1', children: [
+                    bars.classifiedBar,
+                    jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Share of classified content, so small categories stay readable.' })
+                  ] })
+                : null,
+              jsx('div', { className: 'grid grid-cols-2 gap-x-2 gap-y-1', children: shown.categories.map((item, index) => jsxs('div', {
+                className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]'
+              }, [
+                jsx('span', {
+                  'aria-hidden': true,
+                  className: 'mt-1 size-2 shrink-0 rounded-sm',
+                  style: { backgroundColor: categoryColor(item.id, index) }
+                }),
+                jsx('span', { className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
+                jsx('span', { className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', children: item.share === null ? '—' : `${item.share}%` })
+              ])) }),
+              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Grey is content the breakdown did not attribute.' })
             ] })
     }),
     jsx('button', {
