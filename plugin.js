@@ -56,6 +56,26 @@ function elapsedAt(data, snapshotAt, now) {
   return data.elapsedMs + Math.max(0, now - snapshotAt)
 }
 
+/** One reading of the cumulative total, so the label, marker and hint cannot drift apart. */
+function presentCumulative(model) {
+  const total = finiteNumber(model?.cumulativeTotal)
+  if (total === null) return { kind: 'empty', value: '—', hint: 'Awaiting live usage' }
+  const input = finiteNumber(model?.cumulativeInput)
+  const output = finiteNumber(model?.cumulativeOutput)
+  if (model?.cumulativeApprox === true) {
+    return {
+      kind: 'approx',
+      value: `≈ ${formatTokens(total)}`,
+      hint: `Persisted in ${formatTokens(input)} + out ${formatTokens(output)}; exact total unavailable after restart`
+    }
+  }
+  return {
+    kind: 'live',
+    value: formatTokens(total),
+    hint: input === null ? '' : `in ${formatTokens(input)} · out ${formatTokens(output)}`
+  }
+}
+
 function Metric({ label, value, hint }) {
   return jsxs('div', {
     className: 'flex flex-col gap-0.5',
@@ -256,6 +276,12 @@ function ContextPanel() {
   const cumulativeApprox = !useLive && shown?.cumulativeApprox === true
   const cumulativeInput = useLive ? usageModel.cumulativeInput : shown?.cumulativeInput ?? usageModel.cumulativeInput
   const cumulativeOutput = useLive ? usageModel.cumulativeOutput : shown?.cumulativeOutput ?? usageModel.cumulativeOutput
+  const cumulative = presentCumulative({
+    cumulativeTotal,
+    cumulativeInput,
+    cumulativeOutput,
+    cumulativeApprox
+  })
 
   if (!sessionId) {
     return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: [
@@ -267,22 +293,26 @@ function ContextPanel() {
   return jsxs('div', { className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-2 text-(--ui-text-primary)', children: [
     jsx('div', { className: 'text-sm font-semibold', children: 'Context Insight' }),
     jsx('p', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.' }),
-    jsx(Section, { title: 'Session', children: jsxs('div', { className: 'grid grid-cols-2 gap-2', children: [
+    jsx(Section, { title: 'Session totals', children: jsxs('div', { className: 'grid grid-cols-2 gap-2', children: [
       jsx(Metric, {
-        label: cumulativeApprox ? 'Cumulative tokens (approx.)' : 'Cumulative tokens',
-        value: cumulativeTotal === null ? '—' : `${cumulativeApprox ? '≈ ' : ''}${formatTokens(cumulativeTotal)}`,
-        hint: cumulativeTotal === null
-          ? 'Awaiting live usage'
-          : cumulativeApprox
-            ? `Persisted in ${formatTokens(cumulativeInput)} + out ${formatTokens(cumulativeOutput)}; exact total unavailable after restart`
-            : cumulativeInput === null ? undefined : `in ${formatTokens(cumulativeInput)} · out ${formatTokens(cumulativeOutput)}`
+        label: cumulative.kind === 'approx' ? 'Cumulative tokens (approx.)' : 'Cumulative tokens',
+        value: cumulative.value,
+        hint: cumulative.hint || undefined
       }),
-      jsx(Metric, { label: 'Elapsed (natural)', value: shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), hint: shown === null ? 'Loading…' : shown.elapsedKnown ? undefined : 'Start time unavailable' }),
-      jsx(Metric, { label: 'Window occupancy', value: shown === null ? '—' : shown.windowPercent === null ? '—' : `${shown.windowPercent}%` }),
-      jsx(Metric, { label: 'Session id', value: String(sessionId).slice(-8) })
+      jsx(Metric, { label: 'Elapsed (natural)', value: shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), hint: shown === null ? 'Loading…' : shown.elapsedKnown ? undefined : 'Start time unavailable' })
+    ] }) }),
+    jsx(Section, { title: 'Current window', children: jsxs('div', { className: 'grid grid-cols-2 gap-2', children: [
+      jsx(Metric, { label: 'Window occupancy', value: shown === null || shown.windowPercent === null ? '—' : `${shown.windowPercent}%` }),
+      jsx(Metric, {
+        label: 'Used / capacity',
+        value: shown === null || shown.contextUsed === null || shown.contextMax === null
+          ? '—'
+          : `${formatTokens(shown.contextUsed)} / ${formatTokens(shown.contextMax)}`,
+        hint: shown !== null && (shown.contextUsed === null || shown.contextMax === null) ? 'Not measured before the model builds context' : undefined
+      })
     ] }) }),
     jsx(Section, {
-      title: 'Current composition',
+      title: 'Estimated composition',
       subtitle: shown === null ? 'loading' : shown.breakdownAvailable === false ? 'unavailable' : 'estimated',
       children: shown === null
         ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? 'Reading context…' : 'Context unavailable.' })
@@ -301,7 +331,7 @@ function ContextPanel() {
                 ] }),
                 jsx('div', { className: 'h-1 w-full overflow-hidden rounded-full bg-(--ui-stroke-secondary)', children: jsx('div', { className: 'h-full rounded-full bg-(--ui-accent)', style: { width: `${item.share === null ? 0 : item.share}%` } }) })
               ] })),
-              jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: 'Percent of estimated classified content, not of the whole window.' })
+              jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: 'Category shares use the classified estimate. This estimate may differ from window occupancy.' })
             ] })
     }),
     jsx('button', {
@@ -310,7 +340,8 @@ function ContextPanel() {
       className: 'min-h-8 w-fit rounded-md border border-(--ui-stroke-secondary) px-2.5 py-1 text-[0.75rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
       onClick: () => setRefreshKey(value => value + 1),
       children: snapshot.loading ? 'Refreshing…' : 'Refresh'
-    })
+    }),
+    jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: `Session ${String(sessionId).slice(-8)}` })
   ] })
 }
 
