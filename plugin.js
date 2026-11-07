@@ -60,20 +60,20 @@ function Metric({ label, value, hint }) {
   return jsxs('div', {
     className: 'flex flex-col gap-0.5',
     children: [
-      jsx('span', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: label }),
+      jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: label }),
       jsx('span', { className: 'text-[0.875rem] font-medium text-(--ui-text-primary)', children: value }),
-      hint ? jsx('span', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: hint }) : null
+      hint ? jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: hint }) : null
     ]
   })
 }
 
-function Section({ title, subtitle, children }) {
+function Section({ title, subtitle, children, className }) {
   return jsxs('section', {
-    className: 'rounded-md border border-(--ui-stroke-secondary) p-2.5',
+    className: `rounded-md border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-2.5 ${className ?? ''}`,
     children: [
       jsxs('div', { className: 'mb-1.5 flex items-baseline gap-2', children: [
         jsx('h3', { className: 'text-[0.75rem] font-medium text-(--ui-text-primary)', children: title }),
-        subtitle ? jsx('span', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: subtitle }) : null
+        subtitle ? jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
       ] }),
       children
     ]
@@ -258,15 +258,15 @@ function ContextPanel() {
   const cumulativeOutput = useLive ? usageModel.cumulativeOutput : shown?.cumulativeOutput ?? usageModel.cumulativeOutput
 
   if (!sessionId) {
-    return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 px-4 text-center', children: [
+    return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: [
       jsx('div', { className: 'text-[0.8125rem] text-(--ui-text-secondary)', children: 'No active session' }),
-      jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: 'Open a chat to see its context.' })
+      jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: 'Open a chat to see its context.' })
     ] })
   }
 
-  return jsxs('div', { className: 'flex h-full flex-col gap-2 overflow-auto p-2 text-(--ui-text-primary)', children: [
+  return jsxs('div', { className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-2 text-(--ui-text-primary)', children: [
     jsx('div', { className: 'text-sm font-semibold', children: 'Context Insight' }),
-    jsx('p', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.' }),
+    jsx('p', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.' }),
     jsx(Section, { title: 'Session', children: jsxs('div', { className: 'grid grid-cols-2 gap-2', children: [
       jsx(Metric, {
         label: cumulativeApprox ? 'Cumulative tokens (approx.)' : 'Cumulative tokens',
@@ -285,28 +285,29 @@ function ContextPanel() {
       title: 'Current composition',
       subtitle: shown === null ? 'loading' : shown.breakdownAvailable === false ? 'unavailable' : 'estimated',
       children: shown === null
-        ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: snapshot.loading ? 'Reading context…' : 'Context unavailable.' })
+        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? 'Reading context…' : 'Context unavailable.' })
         : shown.breakdownAvailable === false
-          ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: shown.breakdownError || 'Context breakdown unavailable.' })
+          ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.breakdownError || 'Context breakdown unavailable.' })
           : shown.categories.length === 0
-            ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Context not built yet — send a message first.' })
+            ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Context not built yet — send a message first.' })
             : jsxs('div', { className: 'flex flex-col gap-1.5', children: [
-              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: shown.contextUsed === null || shown.contextMax === null
+              jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.contextUsed === null || shown.contextMax === null
                 ? `Current occupancy unavailable · classified estimate ${formatTokens(shown.categoryTotal)}`
                 : `${formatTokens(shown.contextUsed)} / ${formatTokens(shown.contextMax)} tokens · classified estimate ${formatTokens(shown.categoryTotal)}` }),
               shown.categories.map(item => jsxs('div', { className: 'flex flex-col gap-0.5', children: [
-                jsxs('div', { className: 'flex items-baseline justify-between text-[0.6875rem]', children: [
-                  jsx('span', { className: 'text-(--ui-text-secondary)', children: item.label }),
-                  jsx('span', { className: 'text-(--ui-text-quaternary)', children: `${formatTokens(item.tokens)} · ${item.share === null ? '—' : `${item.share}%`}` })
+                jsxs('div', { className: 'flex items-baseline justify-between gap-2 text-[0.75rem]', children: [
+                  jsx('span', { className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
+                  jsx('span', { className: 'shrink-0 tabular-nums text-(--ui-text-tertiary)', children: `${formatTokens(item.tokens)} · ${item.share === null ? '—' : `${item.share}%`}` })
                 ] }),
                 jsx('div', { className: 'h-1 w-full overflow-hidden rounded-full bg-(--ui-stroke-secondary)', children: jsx('div', { className: 'h-full rounded-full bg-(--ui-accent)', style: { width: `${item.share === null ? 0 : item.share}%` } }) })
               ] })),
-              jsx('div', { className: 'text-[0.625rem] text-(--ui-text-quaternary)', children: 'Percent of estimated classified content, not of the whole window.' })
+              jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: 'Percent of estimated classified content, not of the whole window.' })
             ] })
     }),
     jsx('button', {
       type: 'button',
-      className: 'w-fit rounded-md border border-(--ui-stroke-secondary) px-2 py-1 text-[0.6875rem] text-(--ui-text-secondary)',
+      disabled: snapshot.loading,
+      className: 'min-h-8 w-fit rounded-md border border-(--ui-stroke-secondary) px-2.5 py-1 text-[0.75rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
       onClick: () => setRefreshKey(value => value + 1),
       children: snapshot.loading ? 'Refreshing…' : 'Refresh'
     })

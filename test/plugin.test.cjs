@@ -181,6 +181,10 @@ const breakdown = {
 
   const tree = sandbox.ContextPanel()
   assert.ok(tree)
+  const section = sandbox.Section({ title: 'T', subtitle: 'S', className: 'bg-(--ui-surface-background)', children: null })
+  assert.ok(String(section.props.className).includes('bg-(--ui-surface-background)'))
+  const label = sandbox.Metric({ label: 'L', value: 'V' })
+  assert.ok(label.props.children[0].props.className.includes('text-(--ui-text-tertiary)'))
 
   console.log('PASS context-insight: model, category denominator, failure state')
 })().catch(error => { console.error(error); process.exitCode = 1 })
