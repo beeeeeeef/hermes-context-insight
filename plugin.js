@@ -324,7 +324,7 @@ function ContextPanel() {
               jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.contextUsed === null || shown.contextMax === null
                 ? `Current occupancy unavailable · classified estimate ${formatTokens(shown.categoryTotal)}`
                 : `${formatTokens(shown.contextUsed)} / ${formatTokens(shown.contextMax)} tokens · classified estimate ${formatTokens(shown.categoryTotal)}` }),
-              shown.categories.map(item => jsxs('div', { className: 'flex flex-col gap-0.5', children: [
+              shown.categories.map(item => jsxs('div', { className: 'flex flex-col gap-1 pb-1', children: [
                 jsxs('div', { className: 'flex items-baseline justify-between gap-2 text-[0.75rem]', children: [
                   jsx('span', { className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
                   jsx('span', { className: 'shrink-0 tabular-nums text-(--ui-text-tertiary)', children: `${formatTokens(item.tokens)} · ${item.share === null ? '—' : `${item.share}%`}` })
