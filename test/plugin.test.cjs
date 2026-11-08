@@ -46,8 +46,8 @@ function load(requests) {
     useEffect: () => {},
     setInterval: () => 0,
     clearInterval: () => {},
-    jsx: (type, props) => ({ type, props }),
-    jsxs: (type, props) => ({ type, props }),
+    jsx: (type, props) => ({ $$typeof: Symbol.for('react.element'), type, props }),
+    jsxs: (type, props) => ({ $$typeof: Symbol.for('react.element'), type, props }),
     usePluginI18n: () => (key, ...args) => (typeof args[0] === 'undefined' ? key : `${key}:${args.join(',')}`),
     console,
     Date,
@@ -187,6 +187,9 @@ const breakdown = {
   // jsxs(type, props, children) loses its children to the key argument.
   const row = sandbox.legendRow({ id: 'conversation', label: '对话', tokens: 122000, share: 86.5 }, 4)
   assert.equal(row.children.length, 3, 'a legend row keeps three cells')
+  for (const cell of row.children) {
+    assert.equal(cell.$$typeof, Symbol.for('react.element'), 'cells must be React elements, not plain objects')
+  }
   assert.equal(row.children[0].props.style.backgroundColor, '#1f9d63', 'dot carries the semantic colour')
   assert.equal(row.children[1].props.children, '对话', 'label survives')
   assert.equal(row.children[2].props.children, '≈122K · 86.5%', 'value survives')

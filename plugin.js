@@ -238,31 +238,22 @@ function legendRow(item, index) {
   return {
     className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]',
     children: [
-      {
-        type: 'span',
-        props: {
-          'aria-hidden': true,
-          className: 'mt-1 size-2 shrink-0 rounded-sm',
-          style: { backgroundColor: categoryColor(item.id, index) }
-        }
-      },
-      {
-        type: 'span',
-        props: {
-          className: 'min-w-0 break-words text-(--ui-text-secondary)',
-          children: item.label
-        }
-      },
-      {
-        type: 'span',
-        props: {
-          className: 'ml-auto shrink-0 text-right tabular-nums text-(--ui-text-tertiary)',
-          title: item.tokens === null ? undefined : `${formatCount(item.tokens)} tokens`,
-          children: item.share === null
-            ? (item.tokens === null ? '—' : `≈${formatTokens(item.tokens)}`)
-            : `≈${formatTokens(item.tokens)} · ${item.share}%`
-        }
-      }
+      jsx('span', {
+        'aria-hidden': true,
+        className: 'mt-1 size-2 shrink-0 rounded-sm',
+        style: { backgroundColor: categoryColor(item.id, index) }
+      }),
+      jsx('span', {
+        className: 'min-w-0 break-words text-(--ui-text-secondary)',
+        children: item.label
+      }),
+      jsx('span', {
+        className: 'ml-auto shrink-0 text-right tabular-nums text-(--ui-text-tertiary)',
+        title: item.tokens === null ? undefined : `${formatCount(item.tokens)} tokens`,
+        children: item.share === null
+          ? (item.tokens === null ? '—' : `≈${formatTokens(item.tokens)}`)
+          : `≈${formatTokens(item.tokens)} · ${item.share}%`
+      })
     ]
   }
 }
