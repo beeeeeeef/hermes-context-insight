@@ -31,11 +31,10 @@ It does **not** write files, make external network requests, or access a databas
 
 ## Troubleshooting
 
-**The plugin shows as loaded but no `Context` tab appears.** This is a stale pane
-dismissal persisted by Hermes, not a load failure. Collapse and re-open the right
-sidebar (or `Ctrl+J`), or reset the layout. See
-[docs/troubleshooting-pane-not-visible.md](docs/troubleshooting-pane-not-visible.md)
-for the full explanation and the one-time repair this plugin performs.
+**The plugin shows as loaded but no `Context` tab appears.** That is a stale pane
+dismissal persisted by Hermes, not a load failure: collapse and re-open the right
+sidebar (`Ctrl+J`), or reset the layout. This plugin clears such a record once on
+load so the pane is re-adopted next to the other right-hand panes.
 
 ## Tests
 
