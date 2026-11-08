@@ -183,6 +183,14 @@ const breakdown = {
   assert.equal(facts.length, 6)
   assert.equal(facts.filter(fact => fact.value === '—').length, 0, 'no placeholder rows')
 
+  // Regression: legend rows must keep dot + label + value. A row built as
+  // jsxs(type, props, children) loses its children to the key argument.
+  const row = sandbox.legendRow({ id: 'conversation', label: '对话', tokens: 122000, share: 86.5 }, 4)
+  assert.equal(row.children.length, 3, 'a legend row keeps three cells')
+  assert.equal(row.children[0].props.style.backgroundColor, '#1f9d63', 'dot carries the semantic colour')
+  assert.equal(row.children[1].props.children, '对话', 'label survives')
+  assert.equal(row.children[2].props.children, '≈122K · 86.5%', 'value survives')
+
   const partial = sandbox.buildModel({ usage: { total: 10, calls: 3 }, breakdown: null })
   assert.equal(sandbox.presentFacts(partial).length, 1, 'only reported counters become rows')
 

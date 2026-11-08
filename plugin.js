@@ -229,6 +229,44 @@ function compositionBars(model) {
   }
 }
 
+/**
+ * One composition legend row. Returns the props object (not a JSX call) so the
+ * label/value pair cannot be dropped by passing children as a third argument —
+ * `jsxs(type, props, children)` silently treats that third argument as a key.
+ */
+function legendRow(item, index) {
+  return {
+    className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]',
+    children: [
+      {
+        type: 'span',
+        props: {
+          'aria-hidden': true,
+          className: 'mt-1 size-2 shrink-0 rounded-sm',
+          style: { backgroundColor: categoryColor(item.id, index) }
+        }
+      },
+      {
+        type: 'span',
+        props: {
+          className: 'min-w-0 break-words text-(--ui-text-secondary)',
+          children: item.label
+        }
+      },
+      {
+        type: 'span',
+        props: {
+          className: 'ml-auto shrink-0 text-right tabular-nums text-(--ui-text-tertiary)',
+          title: item.tokens === null ? undefined : `${formatCount(item.tokens)} tokens`,
+          children: item.share === null
+            ? (item.tokens === null ? '—' : `≈${formatTokens(item.tokens)}`)
+            : `≈${formatTokens(item.tokens)} · ${item.share}%`
+        }
+      }
+    ]
+  }
+}
+
 function Section({ title, subtitle, children, className }) {
   return jsxs('section', {
     className: `rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-3 ${className ?? ''}`,
@@ -579,23 +617,7 @@ function ContextPanel() {
                     jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('classifiedNote') })
                   ] })
                 : null,
-              jsx('div', { className: 'flex flex-col gap-1', children: shown.categories.map((item, index) => jsxs('div', {
-                className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]'
-              }, [
-                jsx('span', {
-                  'aria-hidden': true,
-                  className: 'mt-1 size-2 shrink-0 rounded-sm',
-                  style: { backgroundColor: categoryColor(item.id, index) }
-                }),
-                jsx('span', { className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
-                jsx('span', {
-                  className: 'ml-auto shrink-0 text-right tabular-nums text-(--ui-text-tertiary)',
-                  title: item.tokens === null ? undefined : `${formatCount(item.tokens)} tokens`,
-                  children: item.share === null
-                    ? (item.tokens === null ? '—' : `≈${formatTokens(item.tokens)}`)
-                    : `≈${formatTokens(item.tokens)} · ${item.share}%`
-                })
-              ])) }),
+              jsx('div', { className: 'flex flex-col gap-1', children: shown.categories.map((item, index) => jsx('div', legendRow(item, index), item.id)) }),
               jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('greyNote') })
             ] })
     }),
