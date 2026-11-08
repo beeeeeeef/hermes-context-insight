@@ -17,6 +17,7 @@ function load(requests) {
     register: item => { created.push(item); return () => {} },
     onEvent: () => () => {},
     storage: {},
+    i18n: { register: bundles => { ctx.bundles = bundles; return () => {} } },
     host: {
       state: {
         focusedSessionId: atom('runtime-1'),
@@ -47,6 +48,7 @@ function load(requests) {
     clearInterval: () => {},
     jsx: (type, props) => ({ type, props }),
     jsxs: (type, props) => ({ type, props }),
+    usePluginI18n: () => (key, ...args) => (typeof args[0] === 'undefined' ? key : `${key}:${args.join(',')}`),
     console,
     Date,
     Map,
@@ -97,6 +99,16 @@ const breakdown = {
   sandbox.plugin.register(ctx)
   assert.equal(created.length, 1)
   assert.equal(created[0].area, 'panes')
+
+  // Localization: both bundles registered, same key set, and the tab label is
+  // resolved at render time so it follows the app locale.
+  assert.ok(ctx.bundles && ctx.bundles.en && ctx.bundles.zh, 'en and zh bundles registered')
+  const enKeys = Object.keys(ctx.bundles.en).sort()
+  const zhKeys = Object.keys(ctx.bundles.zh).sort()
+  assert.equal(zhKeys.join(','), enKeys.join(','), 'zh bundle must cover every en key')
+  assert.equal(created[0].data.tabTitle().type, sandbox.TabTitle)
+  const labels = created[0].data.tabTitle()
+  assert.ok(labels)
 
   const model = await sandbox.loadSessionModel({
     request: ctx.host.request,
@@ -154,13 +166,13 @@ const breakdown = {
   })
   assert.equal(rich.freeTokens, 929000, 'free = capacity - used')
   const facts = sandbox.presentFacts(rich)
-  const factOf = label => facts.find(fact => fact.label === label)
-  assert.equal(factOf('Model').value, 'deepseek-v4.1-flash')
-  assert.equal(factOf('Model calls').value, '708')
-  assert.equal(factOf('Compressions').value, '1')
-  assert.equal(factOf('Cache hit').value, '90.6%', 'percent rounded to one decimal')
-  assert.equal(factOf('Avg throughput').value, '61.2 tok/s')
-  assert.equal(factOf('Avg latency').value, '1.8s')
+  const factOf = key => facts.find(fact => fact.labelKey === key)
+  assert.equal(factOf('factModel').value, 'deepseek-v4.1-flash')
+  assert.equal(factOf('factCalls').value, '708')
+  assert.equal(factOf('factCompressions').value, '1')
+  assert.equal(factOf('factCache').value, '90.6%', 'percent rounded to one decimal')
+  assert.equal(factOf('factTps').value, '61.2 tok/s')
+  assert.equal(factOf('factLatency').value, '1.8s')
   assert.equal(facts.length, 6)
   assert.equal(facts.filter(fact => fact.value === '—').length, 0, 'no placeholder rows')
 
@@ -209,20 +221,22 @@ const breakdown = {
   assert.ok(tree)
   const section = sandbox.Section({ title: 'T', subtitle: 'S', className: 'bg-(--ui-surface-background)', children: null })
   assert.ok(String(section.props.className).includes('bg-(--ui-surface-background)'))
-  const label = sandbox.Metric({ label: 'L', value: 'V' })
-  assert.ok(label.props.children[0].props.className.includes('text-(--ui-text-tertiary)'))
+  const label = sandbox.Section({ title: 'T', subtitle: 'S', children: null })
+  assert.ok(String(label.props.className).includes('bg-(--ui-surface-background)'))
   const approx = sandbox.presentCumulative({ cumulativeTotal: 482000, cumulativeInput: 479000, cumulativeOutput: 2300, cumulativeApprox: true })
   assert.equal(approx.kind, 'approx')
   assert.equal(approx.value, '≈ 482K')
-  assert.equal(approx.hint, 'Persisted in 479K + out 2.3K; exact total unavailable after restart')
+  assert.equal(approx.hint, undefined, 'hints are localized in the panel, not baked into the model')
+  assert.equal(approx.input, 479000)
+  assert.equal(approx.output, 2300)
   const empty = sandbox.presentCumulative({ cumulativeTotal: null })
   assert.equal(empty.kind, 'empty')
   assert.equal(empty.value, '—')
-  assert.equal(empty.hint, 'Awaiting live usage')
+  assert.equal(empty.input, null)
   const live = sandbox.presentCumulative({ cumulativeTotal: 254688, cumulativeInput: 125988, cumulativeOutput: 3132, cumulativeApprox: false })
   assert.equal(live.kind, 'live')
   assert.equal(live.value, '255K')
-  assert.equal(live.hint, 'in 126K · out 3.1K')
+  assert.equal(live.input, 125988)
   assert.equal(sandbox.categoryColor('system_prompt', 0), '#3b6fd4')
   assert.equal(sandbox.categoryColor('conversation', 3), '#1f9d63')
   assert.equal(sandbox.categoryColor('unknown_thing', 0), '#0e9aa7', 'unknown ids fall back to the palette')

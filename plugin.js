@@ -9,11 +9,111 @@
  *
  * 只读：不写盘、不发起外部网络请求、不直接访问数据库；不改变会话内容。
  */
-import { atom, host, useValue } from '@hermes/plugin-sdk'
+import { atom, host, usePluginI18n, useValue } from '@hermes/plugin-sdk'
 import { useEffect, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-context-insight'
+
+/**
+ * Plugin-scoped strings. Hermes resolves them against the app's active locale
+ * (`display.language`), so the panel follows the language switcher instead of
+ * carrying its own. English is the fallback bundle.
+ */
+const MESSAGES = {
+  en: {
+    tab: 'Context',
+    title: 'Context Insight',
+    lede: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.',
+    cumulative: 'cumulative',
+    elapsed: 'elapsed',
+    windowTitle: 'Current window',
+    tokensUsed: 'Tokens used',
+    ofWindow: 'of window',
+    free: 'free',
+    notMeasured: 'Not measured before the model builds context.',
+    barWindow: 'Top bar = occupancy of the window. Grey = unclassified and free.',
+    barNoWindow: 'Window size unavailable; bar shows classified content only.',
+    factsTitle: 'Session facts',
+    factsSubtitle: 'from Hermes usage',
+    factModel: 'Model',
+    factCalls: 'Model calls',
+    factCompressions: 'Compressions',
+    factCache: 'Cache hit',
+    factTps: 'Avg throughput',
+    factLatency: 'Avg latency',
+    compositionTitle: 'Estimated composition',
+    stateLoading: 'loading',
+    stateUnavailable: 'unavailable',
+    stateEstimated: 'estimated',
+    reading: 'Reading context…',
+    contextUnavailable: 'Context unavailable.',
+    breakdownUnavailable: 'Context breakdown unavailable.',
+    notBuilt: 'Context not built yet — send a message first.',
+    classified: 'Classified estimate',
+    occupancyUnavailable: 'occupancy unavailable',
+    classifiedNote: 'Share of classified content, so small categories stay readable.',
+    greyNote: 'Grey is content the breakdown did not attribute.',
+    refresh: 'Refresh',
+    refreshing: 'Refreshing…',
+    awaitingUsage: 'Awaiting live usage',
+    persistedHint: (input, output) => `Persisted in ${input} + out ${output}; exact total unavailable after restart`,
+    ioHint: (input, output) => `in ${input} · out ${output}`,
+    freeHint: (free, max) => `${free} tokens free of ${max}`,
+    updatedJustNow: 'Updated just now',
+    updatedAgo: seconds => `Updated ${seconds}s ago`,
+    notReadYet: 'Not read yet',
+    session: id => `Session ${id}`,
+    noSession: 'No active session',
+    openChat: 'Open a chat to see its context.'
+  },
+  zh: {
+    tab: '上下文',
+    title: '上下文洞察',
+    lede: '显示本场会话的累计用量、自然历时，以及当前上下文的组成。分类数值为估算。',
+    cumulative: '累计',
+    elapsed: '历时',
+    windowTitle: '当前窗口',
+    tokensUsed: '已用 token',
+    ofWindow: '占窗口',
+    free: '剩余',
+    notMeasured: '模型尚未构建上下文，暂无测量值。',
+    barWindow: '上方彩条 = 窗口占用比例；灰色为未分类与空闲部分。',
+    barNoWindow: '窗口容量未知，彩条仅表示已分类内容的构成。',
+    factsTitle: '会话统计',
+    factsSubtitle: '数据来自 Hermes',
+    factModel: '模型',
+    factCalls: '模型调用',
+    factCompressions: '压缩次数',
+    factCache: '缓存命中',
+    factTps: '平均吞吐',
+    factLatency: '平均延迟',
+    compositionTitle: '估算组成',
+    stateLoading: '读取中',
+    stateUnavailable: '不可用',
+    stateEstimated: '估算',
+    reading: '正在读取上下文…',
+    contextUnavailable: '上下文不可用。',
+    breakdownUnavailable: '上下文分类暂不可用。',
+    notBuilt: '上下文尚未构建 —— 先发一条消息试试。',
+    classified: '分类合计约',
+    occupancyUnavailable: '占用未知',
+    classifiedNote: '按已分类内容计算占比，因此小类别也能看清。',
+    greyNote: '灰色部分为未能归类的内容。',
+    refresh: '刷新',
+    refreshing: '刷新中…',
+    awaitingUsage: '等待实时用量',
+    persistedHint: (input, output) => `来自已保存记录：输入 ${input} + 输出 ${output}；重启后拿不到精确总量`,
+    ioHint: (input, output) => `输入 ${input} · 输出 ${output}`,
+    freeHint: (free, max) => `共 ${max}，剩余 ${free}`,
+    updatedJustNow: '刚刚更新',
+    updatedAgo: seconds => `${seconds} 秒前更新`,
+    notReadYet: '尚未读取',
+    session: id => `会话 ${id}`,
+    noSession: '没有活跃会话',
+    openChat: '打开一个对话后即可查看上下文。'
+  }
+}
 
 const $snapshot = atom({ sessionId: null, profile: null, data: null, loading: false, error: '', at: 0 })
 const $tick = atom(0)
@@ -65,39 +165,15 @@ function elapsedAt(data, snapshotAt, now) {
 /** One reading of the cumulative total, so the label, marker and hint cannot drift apart. */
 function presentCumulative(model) {
   const total = finiteNumber(model?.cumulativeTotal)
-  if (total === null) return { kind: 'empty', value: '—', hint: 'Awaiting live usage' }
+  if (total === null) return { kind: 'empty', value: '—', input: null, output: null }
   const input = finiteNumber(model?.cumulativeInput)
   const output = finiteNumber(model?.cumulativeOutput)
   if (model?.cumulativeApprox === true) {
-    return {
-      kind: 'approx',
-      value: `≈ ${formatTokens(total)}`,
-      hint: `Persisted in ${formatTokens(input)} + out ${formatTokens(output)}; exact total unavailable after restart`
-    }
+    return { kind: 'approx', value: `≈ ${formatTokens(total)}`, input, output }
   }
-  return {
-    kind: 'live',
-    value: formatTokens(total),
-    hint: input === null ? '' : `in ${formatTokens(input)} · out ${formatTokens(output)}`
-  }
+  return { kind: 'live', value: formatTokens(total), input, output }
 }
 
-function Metric({ label, value, hint }) {
-  return jsxs('div', {
-    className: 'flex flex-col gap-0.5',
-    children: [
-      jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: label }),
-      jsx('span', { className: 'text-[0.875rem] font-medium text-(--ui-text-primary)', children: value }),
-      hint ? jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: hint }) : null
-    ]
-  })
-}
-
-/**
- * Fixed semantic colours per category id. Stable across sessions on purpose:
- * the bar is read by colour, so a category must not change colour because the
- * theme changed. Unknown ids cycle through the same palette.
- */
 const CATEGORY_COLORS = {
   system_prompt: '#3b6fd4',
   tool_definitions: '#e08a1e',
@@ -297,16 +373,17 @@ function buildModel(input) {
 function presentFacts(model) {
   if (!model) return []
   const facts = []
-  if (model.model) facts.push({ label: 'Model', value: model.model })
-  if (model.calls !== null) facts.push({ label: 'Model calls', value: formatCount(model.calls) })
-  if (model.compressions !== null) facts.push({ label: 'Compressions', value: formatCount(model.compressions) })
-  if (model.cacheHitPct !== null) facts.push({ label: 'Cache hit', value: `${Math.round(model.cacheHitPct * 10) / 10}%` })
-  if (model.avgTps !== null) facts.push({ label: 'Avg throughput', value: `${Math.round(model.avgTps * 10) / 10} tok/s` })
-  if (model.avgLatencyS !== null) facts.push({ label: 'Avg latency', value: `${Math.round(model.avgLatencyS * 10) / 10}s` })
+  if (model.model) facts.push({ labelKey: 'factModel', value: model.model })
+  if (model.calls !== null) facts.push({ labelKey: 'factCalls', value: formatCount(model.calls) })
+  if (model.compressions !== null) facts.push({ labelKey: 'factCompressions', value: formatCount(model.compressions) })
+  if (model.cacheHitPct !== null) facts.push({ labelKey: 'factCache', value: `${Math.round(model.cacheHitPct * 10) / 10}%` })
+  if (model.avgTps !== null) facts.push({ labelKey: 'factTps', value: `${Math.round(model.avgTps * 10) / 10} tok/s` })
+  if (model.avgLatencyS !== null) facts.push({ labelKey: 'factLatency', value: `${Math.round(model.avgLatencyS * 10) / 10}s` })
   return facts
 }
 
 function ContextPanel() {
+  const t = usePluginI18n(ID)
   const usage = useValue(host.state.focusedUsage)
   const sessionId = useValue(host.state.focusedSessionId)
   const storedSessionId = useValue(host.state.focusedStoredSessionId)
@@ -367,85 +444,91 @@ function ContextPanel() {
   const bars = compositionBars(shown)
   const facts = presentFacts(shown !== null ? shown : usageModel)
   const updatedSeconds = snapshot.at > 0 ? Math.max(0, Math.round((now - snapshot.at) / 1000)) : null
+  const cumulativeHint = cumulative.kind === 'empty'
+    ? t('awaitingUsage')
+    : cumulative.kind === 'approx'
+      ? t('persistedHint', formatTokens(cumulative.input), formatTokens(cumulative.output))
+      : cumulative.input === null ? '' : t('ioHint', formatTokens(cumulative.input), formatTokens(cumulative.output))
 
   if (!sessionId) {
     return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: [
-      jsx('div', { className: 'text-[0.8125rem] text-(--ui-text-secondary)', children: 'No active session' }),
-      jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: 'Open a chat to see its context.' })
+      jsx('div', { className: 'text-[0.8125rem] text-(--ui-text-secondary)', children: t('noSession') }),
+      jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: t('openChat') })
     ] })
   }
 
   return jsxs('div', { className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-2 text-(--ui-text-primary)', children: [
-    jsx('div', { className: 'text-sm font-semibold', children: 'Context Insight' }),
-    jsx('p', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.' }),
+    jsx('div', { className: 'text-sm font-semibold', children: t('title') }),
+    jsx('p', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('lede') }),
     jsx('div', {
       className: 'flex flex-wrap items-baseline gap-x-1.5 text-[0.6875rem] text-(--ui-text-tertiary)',
+      title: cumulativeHint || undefined,
       children: [
         jsx('span', { className: 'text-(--ui-text-secondary)', children: cumulative.value }),
-        jsx('span', { children: 'cumulative' }),
+        jsx('span', { children: t('cumulative') }),
         jsx('span', { 'aria-hidden': true, children: '·' }),
         jsx('span', { className: 'text-(--ui-text-secondary)', children: shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)) }),
-        jsx('span', { children: 'elapsed' })
+        jsx('span', { children: t('elapsed') })
       ]
     }),
-    jsx(Section, { title: 'Current window', children: jsxs('div', { className: 'flex flex-col gap-2', children: [
+    jsx(Section, { title: t('windowTitle'), children: jsxs('div', { className: 'flex flex-col gap-2', children: [
       jsxs('div', { className: 'flex items-baseline justify-between gap-2', children: [
         jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5', children: [
-          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Tokens used' }),
+          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('tokensUsed') }),
           jsx('span', { className: 'text-[1.25rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.contextUsed === null
             ? '—'
             : `${formatTokens(shown.contextUsed)} / ${shown.contextMax === null ? '—' : formatTokens(shown.contextMax)}` })
         ] }),
         jsxs('div', { className: 'flex shrink-0 flex-col items-end gap-0.5', children: [
           jsx('span', { className: 'text-[1.25rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.windowPercent === null ? '—' : `${shown.windowPercent}%` }),
-          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'of window' })
+          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('ofWindow') })
         ] })
       ] }),
       shown !== null && shown.freeTokens !== null
         ? jsx('div', {
             className: 'text-[0.75rem] text-(--ui-text-tertiary)',
-            title: shown.contextMax === null ? undefined : `${formatCount(shown.freeTokens)} tokens free of ${formatCount(shown.contextMax)}`,
-            children: `${formatTokens(shown.freeTokens)} free`
+            title: shown.contextMax === null ? undefined : t('freeHint', formatCount(shown.freeTokens), formatCount(shown.contextMax)),
+            children: `${formatTokens(shown.freeTokens)} ${t('free')}`
           })
         : null,
       shown !== null && (shown.contextUsed === null || shown.contextMax === null)
-        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Not measured before the model builds context.' })
+        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('notMeasured') })
         : null,
       shown !== null && shown.categories.length > 0 && bars !== null && bars.windowBar
         ? bars.windowBar
         : null,
       shown !== null && shown.categories.length > 0
         ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: bars === null || bars.windowBar === null
-          ? 'Window size unavailable; bar shows classified content only.'
-          : 'Top bar = occupancy of the window. Grey = unclassified and free.' })
+          ? t('barNoWindow')
+          : t('barWindow') })
         : null
     ] }) }),
     facts.length > 0
-      ? jsx(Section, { title: 'Session facts', subtitle: 'from Hermes usage', children: jsx('div', {
+      ? jsx(Section, { title: t('factsTitle'), subtitle: t('factsSubtitle'), children: jsx('div', {
           className: 'grid grid-cols-2 gap-x-2 gap-y-1.5',
           children: facts.map(fact => jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5' }, [
-            jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: fact.label }),
+            jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t(fact.labelKey) }),
             jsx('span', { className: 'truncate text-[0.75rem] tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
           ]))
         }) })
       : null,
     jsx(Section, {
-      title: 'Estimated composition',
-      subtitle: shown === null ? 'loading' : shown.breakdownAvailable === false ? 'unavailable' : 'estimated',
+      title: t('compositionTitle'),
+      subtitle: shown === null ? t('stateLoading') : shown.breakdownAvailable === false ? t('stateUnavailable') : t('stateEstimated'),
       children: shown === null
-        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? 'Reading context…' : 'Context unavailable.' })
+        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? t('reading') : t('contextUnavailable') })
         : shown.breakdownAvailable === false
-          ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.breakdownError || 'Context breakdown unavailable.' })
+          ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', title: shown.breakdownError, children: t('breakdownUnavailable') })
           : shown.categories.length === 0
-            ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Context not built yet — send a message first.' })
+            ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('notBuilt') })
             : jsxs('div', { className: 'flex flex-col gap-1.5', children: [
               jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.contextUsed === null || shown.contextMax === null
-                ? `Classified estimate ${formatTokens(shown.categoryTotal)} · occupancy unavailable`
-                : `Classified estimate ${formatTokens(shown.categoryTotal)}` }),
+                ? `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('occupancyUnavailable')}`
+                : `${t('classified')} ${formatTokens(shown.categoryTotal)}` }),
               bars !== null && bars.classifiedBar
                 ? jsxs('div', { className: 'flex flex-col gap-1', children: [
                     bars.classifiedBar,
-                    jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Share of classified content, so small categories stay readable.' })
+                    jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('classifiedNote') })
                   ] })
                 : null,
               jsx('div', { className: 'flex flex-col gap-1', children: shown.categories.map((item, index) => jsxs('div', {
@@ -465,7 +548,7 @@ function ContextPanel() {
                     : `≈${formatTokens(item.tokens)} · ${item.share}%`
                 })
               ])) }),
-              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Grey is content the breakdown did not attribute.' })
+              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('greyNote') })
             ] })
     }),
     jsx('button', {
@@ -473,15 +556,21 @@ function ContextPanel() {
       disabled: snapshot.loading,
       className: 'min-h-8 w-fit rounded-md border border-(--ui-stroke-secondary) px-2.5 py-1 text-[0.75rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
       onClick: () => setRefreshKey(value => value + 1),
-      children: snapshot.loading ? 'Refreshing…' : 'Refresh'
+      children: snapshot.loading ? t('refreshing') : t('refresh')
     }),
     jsxs('div', { className: 'flex items-center justify-between gap-2 text-[0.6875rem] text-(--ui-text-quaternary)', children: [
       jsx('span', { children: updatedSeconds === null
-        ? 'Not read yet'
-        : updatedSeconds < 2 ? 'Updated just now' : `Updated ${updatedSeconds}s ago` }),
-      jsx('span', { children: `Session ${String(sessionId).slice(-8)}` })
+        ? t('notReadYet')
+        : updatedSeconds < 2 ? t('updatedJustNow') : t('updatedAgo', updatedSeconds) }),
+      jsx('span', { children: t('session', String(sessionId).slice(-8)) })
     ] })
   ] })
+}
+
+/** Pane tab label that follows the app locale, unlike the register-time title. */
+function TabTitle() {
+  const t = usePluginI18n(ID)
+  return t('tab')
 }
 
 export default {
@@ -489,6 +578,7 @@ export default {
   name: 'Context Insight',
   defaultEnabled: true,
   register(ctx) {
+    ctx.i18n?.register?.(MESSAGES)
     ctx.onEvent('message.complete', event => {
       if (event?.session_id !== host.state.focusedSessionId.get()) return
       $tick.set($tick.get() + 1)
@@ -497,7 +587,7 @@ export default {
       id: 'panel',
       area: 'panes',
       title: 'Context',
-      data: { placement: 'right', width: '340px' },
+      data: { placement: 'right', width: '340px', tabTitle: () => jsx(TabTitle, {}) },
       render: () => jsx(ContextPanel, {})
     })
 
