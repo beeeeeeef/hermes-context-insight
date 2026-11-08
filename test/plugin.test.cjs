@@ -140,6 +140,32 @@ const breakdown = {
   assert.equal(cold.contextMax, null)
   assert.equal(cold.windowPercent, null)
   assert.equal(cold.categoryTotal, 236000, 'estimated categories remain visible while occupancy is unavailable')
+  assert.equal(cold.freeTokens, null, 'no free-token figure without a measured window')
+  assert.equal(sandbox.presentFacts(cold).length, 0, 'no facts invented when Hermes reports none')
+
+  const rich = sandbox.buildModel({
+    usage: {
+      total: 254688, input: 125988, output: 3132,
+      model: 'deepseek-v4.1-flash', calls: 708, compressions: 1,
+      cache_hit_pct: 90.57, avg_tps: 61.24, avg_latency_s: 1.83
+    },
+    breakdown: { context_used: 121000, context_max: 1050000, categories: [] },
+    now: 100000
+  })
+  assert.equal(rich.freeTokens, 929000, 'free = capacity - used')
+  const facts = sandbox.presentFacts(rich)
+  const factOf = label => facts.find(fact => fact.label === label)
+  assert.equal(factOf('Model').value, 'deepseek-v4.1-flash')
+  assert.equal(factOf('Model calls').value, '708')
+  assert.equal(factOf('Compressions').value, '1')
+  assert.equal(factOf('Cache hit').value, '90.6%', 'percent rounded to one decimal')
+  assert.equal(factOf('Avg throughput').value, '61.2 tok/s')
+  assert.equal(factOf('Avg latency').value, '1.8s')
+  assert.equal(facts.length, 6)
+  assert.equal(facts.filter(fact => fact.value === '—').length, 0, 'no placeholder rows')
+
+  const partial = sandbox.buildModel({ usage: { total: 10, calls: 3 }, breakdown: null })
+  assert.equal(sandbox.presentFacts(partial).length, 1, 'only reported counters become rows')
 
   const persisted = await sandbox.loadSessionModel({
     request: async () => { throw new Error('gateway down') },

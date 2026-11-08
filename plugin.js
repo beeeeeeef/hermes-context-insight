@@ -38,6 +38,12 @@ function formatTokens(value) {
   return `${(value / 1_000_000).toFixed(2)}M`
 }
 
+/** Whole counts (calls, compressions) with thousands separators. */
+function formatCount(value) {
+  if (value === null) return '—'
+  return String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
 function formatElapsed(ms) {
   if (ms === null || ms < 0) return '—'
   const totalSeconds = Math.floor(ms / 1000)
@@ -274,8 +280,30 @@ function buildModel(input) {
     })),
     categoryTotal,
     elapsedMs: startedAt === null ? null : Math.max(0, now - startedAt * 1000),
-    elapsedKnown: startedAt !== null
+    elapsedKnown: startedAt !== null,
+    // Counters Hermes already reports on the focused session. They are read
+    // verbatim — the plugin never derives or estimates them.
+    model: typeof usage?.model === 'string' && usage.model ? usage.model : null,
+    calls: finiteNumber(usage?.calls),
+    compressions: finiteNumber(usage?.compressions),
+    cacheHitPct: finiteNumber(usage?.cache_hit_pct),
+    avgTps: finiteNumber(usage?.avg_tps),
+    avgLatencyS: finiteNumber(usage?.avg_latency_s),
+    freeTokens: contextUsed !== null && contextMax !== null ? Math.max(0, contextMax - contextUsed) : null
   }
+}
+
+/** Session counters as label/value rows; absent values are omitted, never zeroed. */
+function presentFacts(model) {
+  if (!model) return []
+  const facts = []
+  if (model.model) facts.push({ label: 'Model', value: model.model })
+  if (model.calls !== null) facts.push({ label: 'Model calls', value: formatCount(model.calls) })
+  if (model.compressions !== null) facts.push({ label: 'Compressions', value: formatCount(model.compressions) })
+  if (model.cacheHitPct !== null) facts.push({ label: 'Cache hit', value: `${Math.round(model.cacheHitPct * 10) / 10}%` })
+  if (model.avgTps !== null) facts.push({ label: 'Avg throughput', value: `${Math.round(model.avgTps * 10) / 10} tok/s` })
+  if (model.avgLatencyS !== null) facts.push({ label: 'Avg latency', value: `${Math.round(model.avgLatencyS * 10) / 10}s` })
+  return facts
 }
 
 function ContextPanel() {
@@ -337,6 +365,8 @@ function ContextPanel() {
     cumulativeApprox
   })
   const bars = compositionBars(shown)
+  const facts = presentFacts(shown !== null ? shown : usageModel)
+  const updatedSeconds = snapshot.at > 0 ? Math.max(0, Math.round((now - snapshot.at) / 1000)) : null
 
   if (!sessionId) {
     return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: [
@@ -371,6 +401,13 @@ function ContextPanel() {
           jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'of window' })
         ] })
       ] }),
+      shown !== null && shown.freeTokens !== null
+        ? jsx('div', {
+            className: 'text-[0.75rem] text-(--ui-text-tertiary)',
+            title: shown.contextMax === null ? undefined : `${formatCount(shown.freeTokens)} tokens free of ${formatCount(shown.contextMax)}`,
+            children: `${formatTokens(shown.freeTokens)} free`
+          })
+        : null,
       shown !== null && (shown.contextUsed === null || shown.contextMax === null)
         ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: 'Not measured before the model builds context.' })
         : null,
@@ -383,6 +420,15 @@ function ContextPanel() {
           : 'Top bar = occupancy of the window. Grey = unclassified and free.' })
         : null
     ] }) }),
+    facts.length > 0
+      ? jsx(Section, { title: 'Session facts', subtitle: 'from Hermes usage', children: jsx('div', {
+          className: 'grid grid-cols-2 gap-x-2 gap-y-1.5',
+          children: facts.map(fact => jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5' }, [
+            jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: fact.label }),
+            jsx('span', { className: 'truncate text-[0.75rem] tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
+          ]))
+        }) })
+      : null,
     jsx(Section, {
       title: 'Estimated composition',
       subtitle: shown === null ? 'loading' : shown.breakdownAvailable === false ? 'unavailable' : 'estimated',
@@ -402,7 +448,7 @@ function ContextPanel() {
                     jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Share of classified content, so small categories stay readable.' })
                   ] })
                 : null,
-              jsx('div', { className: 'grid grid-cols-2 gap-x-2 gap-y-1', children: shown.categories.map((item, index) => jsxs('div', {
+              jsx('div', { className: 'flex flex-col gap-1', children: shown.categories.map((item, index) => jsxs('div', {
                 className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]'
               }, [
                 jsx('span', {
@@ -411,7 +457,13 @@ function ContextPanel() {
                   style: { backgroundColor: categoryColor(item.id, index) }
                 }),
                 jsx('span', { className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
-                jsx('span', { className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', children: item.share === null ? '—' : `${item.share}%` })
+                jsx('span', {
+                  className: 'ml-auto shrink-0 text-right tabular-nums text-(--ui-text-tertiary)',
+                  title: item.tokens === null ? undefined : `${formatCount(item.tokens)} tokens`,
+                  children: item.share === null
+                    ? (item.tokens === null ? '—' : `≈${formatTokens(item.tokens)}`)
+                    : `≈${formatTokens(item.tokens)} · ${item.share}%`
+                })
               ])) }),
               jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Grey is content the breakdown did not attribute.' })
             ] })
@@ -423,7 +475,12 @@ function ContextPanel() {
       onClick: () => setRefreshKey(value => value + 1),
       children: snapshot.loading ? 'Refreshing…' : 'Refresh'
     }),
-    jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: `Session ${String(sessionId).slice(-8)}` })
+    jsxs('div', { className: 'flex items-center justify-between gap-2 text-[0.6875rem] text-(--ui-text-quaternary)', children: [
+      jsx('span', { children: updatedSeconds === null
+        ? 'Not read yet'
+        : updatedSeconds < 2 ? 'Updated just now' : `Updated ${updatedSeconds}s ago` }),
+      jsx('span', { children: `Session ${String(sessionId).slice(-8)}` })
+    ] })
   ] })
 }
 
