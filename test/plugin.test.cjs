@@ -186,6 +186,31 @@ const breakdown = {
   const partial = sandbox.buildModel({ usage: { total: 10, calls: 3 }, breakdown: null })
   assert.equal(sandbox.presentFacts(partial).length, 1, 'only reported counters become rows')
 
+  // Regression: fact tiles are built with jsxs(type, props) — children passed as
+  // a third argument are silently dropped, which rendered six blank tiles.
+  ctx.host.state.focusedUsage.set({
+    total: 82000, input: 70000, output: 12000,
+    model: 'deepseek-v4.1-flash', calls: 708, compressions: 1,
+    cache_hit_pct: 90.57, avg_tps: 61.24, avg_latency_s: 1.83
+  })
+  const panel = sandbox.ContextPanel()
+  const walk = (node, predicate, out = []) => {
+    if (!node || typeof node !== 'object') return out
+    if (Array.isArray(node)) { node.forEach(child => walk(child, predicate, out)); return out }
+    if (node.props) {
+      if (predicate(node)) out.push(node)
+      if (node.props.children !== undefined) walk(node.props.children, predicate, out)
+    }
+    return out
+  }
+  const tiles = walk(panel, node => String(node.props.className || '').includes('flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary)'))
+  assert.equal(tiles.length, 6, 'six fact tiles render')
+  for (const tile of tiles) {
+    assert.equal(tile.props.children.length, 2, 'each tile keeps its label and value')
+    assert.ok(tile.props.children[0].props.children, 'tile label is not empty')
+    assert.ok(tile.props.children[1].props.children, 'tile value is not empty')
+  }
+
   const persisted = await sandbox.loadSessionModel({
     request: async () => { throw new Error('gateway down') },
     sessionId: 'runtime-1',

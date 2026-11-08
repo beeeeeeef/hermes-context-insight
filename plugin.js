@@ -52,6 +52,7 @@ const MESSAGES = {
     breakdownUnavailable: 'Context breakdown unavailable.',
     notBuilt: 'Context not built yet — send a message first.',
     classified: 'Classified estimate',
+    coverage: pct => `≈${pct}% of window`,
     occupancyUnavailable: 'occupancy unavailable',
     classifiedNote: 'Share of classified content, so small categories stay readable.',
     greyNote: 'Grey is content the breakdown did not attribute.',
@@ -99,6 +100,7 @@ const MESSAGES = {
     breakdownUnavailable: '上下文分类暂不可用。',
     notBuilt: '上下文尚未构建 —— 先发一条消息试试。',
     classified: '分类合计约',
+    coverage: pct => `约占窗口 ${pct}%`,
     occupancyUnavailable: '占用未知',
     classifiedNote: '按已分类内容计算占比，因此小类别也能看清。',
     greyNote: '灰色部分为未能归类的内容。',
@@ -550,11 +552,12 @@ function ContextPanel() {
       ? jsx(Section, { title: t('factsTitle'), subtitle: t('factsSubtitle'), children: jsx('div', {
           className: 'grid grid-cols-2 gap-1.5',
           children: facts.map(fact => jsxs('div', {
-            className: 'flex min-w-0 flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary) px-2 py-1.5'
-          }, [
-            jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t(fact.labelKey) }),
-            jsx('span', { className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
-          ]))
+            className: 'flex min-w-0 flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary) px-2 py-1.5',
+            children: [
+              jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t(fact.labelKey) }),
+              jsx('span', { className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
+            ]
+          }))
         }) })
       : null,
     jsx(Section, {
@@ -569,7 +572,7 @@ function ContextPanel() {
             : jsxs('div', { className: 'flex flex-col gap-1.5', children: [
               jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.contextUsed === null || shown.contextMax === null
                 ? `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('occupancyUnavailable')}`
-                : `${t('classified')} ${formatTokens(shown.categoryTotal)}` }),
+                : `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('coverage', Math.round((shown.categoryTotal / shown.contextMax) * 1000) / 10)}` }),
               bars !== null && bars.classifiedBar
                 ? jsxs('div', { className: 'flex flex-col gap-1', children: [
                     bars.classifiedBar,
