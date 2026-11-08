@@ -2,6 +2,9 @@
 
 A read-only Hermes Desktop plugin that shows the current chat's context usage.
 
+The panel follows the Hermes interface language: English and Simplified Chinese
+bundles ship in `plugin.js` and resolve against `display.language`.
+
 ## What it shows
 
 - **Cumulative tokens** — the session's billed input and output tokens, read from Hermes's live `focusedUsage` state. When Hermes has just restarted and has no live usage snapshot, the panel falls back to the persisted session row's `input_tokens + output_tokens`, prefixed with `≈`. That fallback is approximate and is never presented as `usage.total`.
