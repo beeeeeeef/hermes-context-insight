@@ -29,6 +29,14 @@ It does **not** write files, make external network requests, or access a databas
 - A session absent from `active_list`, or without `started_at`, shows elapsed time as unavailable rather than inventing a start.
 - Before the agent has built its context, the breakdown may return no categories; the panel says so instead of drawing zeros.
 
+## Troubleshooting
+
+**The plugin shows as loaded but no `Context` tab appears.** This is a stale pane
+dismissal persisted by Hermes, not a load failure. Collapse and re-open the right
+sidebar (or `Ctrl+J`), or reset the layout. See
+[docs/troubleshooting-pane-not-visible.md](docs/troubleshooting-pane-not-visible.md)
+for the full explanation and the one-time repair this plugin performs.
+
 ## Tests
 
 The plugin has no build step. The mock test loads `plugin.js` in a Node VM with a fake Hermes SDK:
