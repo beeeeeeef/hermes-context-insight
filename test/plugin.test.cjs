@@ -126,6 +126,13 @@ const breakdown = {
   assert.equal(model.elapsedKnown, true)
   assert.equal(model.elapsedMs, 3600000)
   assert.equal(sandbox.elapsedAt(model, 1000, 5000), 3604000)
+  // The snapshot itself must carry the counters the panel renders after a
+  // refresh; they used to be dropped, which produced "NaN 剩余" and an empty
+  // Session facts card.
+  assert.equal(typeof model.freeTokens, 'number', 'freeTokens must survive the loader')
+  assert.equal(model.freeTokens, 1000000 - 28568)
+  assert.equal(model.calls, null, 'absent counters stay null, never zero')
+  assert.equal(sandbox.formatTokens(Number.NaN), '—', 'NaN must not render as a number')
 
   const missing = await sandbox.loadSessionModel({
     request: async () => { throw new Error('down') },

@@ -24,7 +24,8 @@ const MESSAGES = {
   en: {
     tab: 'Context',
     title: 'Context Insight',
-    lede: 'Cumulative usage, session elapsed time, and current context composition. Category estimates are approximate.',
+    lede: 'Cumulative usage, natural elapsed time, and what fills the context window.',
+    capacity: total => `Capacity ${total}`,
     cumulative: 'cumulative',
     elapsed: 'elapsed',
     windowTitle: 'Current window',
@@ -70,7 +71,8 @@ const MESSAGES = {
   zh: {
     tab: '上下文',
     title: '上下文洞察',
-    lede: '显示本场会话的累计用量、自然历时，以及当前上下文的组成。分类数值为估算。',
+    lede: '累计用量、自然历时，以及当前上下文都由什么占着。',
+    capacity: total => `容量 ${total}`,
     cumulative: '累计',
     elapsed: '历时',
     windowTitle: '当前窗口',
@@ -132,7 +134,7 @@ function finiteNumber(value) {
 }
 
 function formatTokens(value) {
-  if (value === null) return '—'
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   if (value < 1000) return String(value)
   if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}K`
   return `${(value / 1_000_000).toFixed(2)}M`
@@ -203,13 +205,15 @@ function compositionBars(model) {
   if (windowScale === null && classifiedScale === null) return null
 
   const row = (scale, label) => jsx('div', {
-    className: 'flex h-2 w-full overflow-hidden rounded-sm bg-(--ui-stroke-secondary)',
+    className: 'flex h-2.5 w-full overflow-hidden rounded-full bg-(--ui-stroke-secondary)',
+    role: 'img',
     'aria-label': label,
     children: model.categories.map((item, index) => jsx('div', {
       className: 'h-full',
       style: {
         width: `${scale === null || item.tokens === null ? 0 : Math.min(100, (item.tokens / scale) * 100)}%`,
-        backgroundColor: categoryColor(item.id, index)
+        backgroundColor: categoryColor(item.id, index),
+        boxShadow: 'inset -1px 0 0 rgba(0,0,0,0.10)'
       },
       title: `${item.label} ${formatTokens(item.tokens)} of ${formatTokens(scale)}`
     }, item.id))
@@ -225,13 +229,42 @@ function compositionBars(model) {
 
 function Section({ title, subtitle, children, className }) {
   return jsxs('section', {
-    className: `rounded-md border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-2.5 ${className ?? ''}`,
+    className: `rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-3 ${className ?? ''}`,
     children: [
-      jsxs('div', { className: 'mb-1.5 flex items-baseline gap-2', children: [
-        jsx('h3', { className: 'text-[0.75rem] font-medium text-(--ui-text-primary)', children: title }),
-        subtitle ? jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
+      jsxs('div', { className: 'mb-2 flex items-baseline gap-2', children: [
+        jsx('h3', { className: 'text-[0.8125rem] font-medium text-(--ui-text-primary)', children: title }),
+        subtitle ? jsx('span', { className: 'ml-auto shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
       ] }),
       children
+    ]
+  })
+}
+
+/** Occupancy ring: the one figure that should read at a glance. */
+function OccupancyRing({ percent, label }) {
+  const radius = 24
+  const circumference = 2 * Math.PI * radius
+  const safe = percent === null || !Number.isFinite(percent) ? null : Math.max(0, Math.min(100, percent))
+  const offset = safe === null ? circumference : circumference * (1 - safe / 100)
+  return jsxs('svg', {
+    width: 64, height: 64, viewBox: '0 0 64 64',
+    role: 'img',
+    'aria-label': label,
+    className: 'shrink-0',
+    children: [
+      jsx('circle', { cx: 32, cy: 32, r: radius, fill: 'none', stroke: 'var(--ui-stroke-secondary)', strokeWidth: 6 }),
+      safe === null ? null : jsx('circle', {
+        cx: 32, cy: 32, r: radius, fill: 'none',
+        stroke: 'var(--ui-accent)', strokeWidth: 6, strokeLinecap: 'round',
+        strokeDasharray: `${circumference}`, strokeDashoffset: `${offset}`,
+        transform: 'rotate(-90 32 32)'
+      }),
+      jsx('text', {
+        x: 32, y: 32, textAnchor: 'middle', dominantBaseline: 'central',
+        fontSize: safe === null ? 11 : 13, fontWeight: 600,
+        fill: 'var(--ui-text-primary)',
+        children: safe === null ? '—' : `${safe}%`
+      })
     ]
   })
 }
@@ -257,7 +290,16 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     breakdownAvailable: false,
     elapsedAvailable: false,
     breakdownError: '',
-    activeListError: ''
+    activeListError: '',
+    // Usage counters travel with the snapshot so the panel keeps rendering them
+    // after a refresh; they are read verbatim, never derived.
+    model: typeof usage?.model === 'string' && usage.model ? usage.model : null,
+    calls: finiteNumber(usage?.calls),
+    compressions: finiteNumber(usage?.compressions),
+    cacheHitPct: finiteNumber(usage?.cache_hit_pct),
+    avgTps: finiteNumber(usage?.avg_tps),
+    avgLatencyS: finiteNumber(usage?.avg_latency_s),
+    freeTokens: null
   }
   if (!sessionId) return result
 
@@ -275,6 +317,7 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     result.windowPercent = model.windowPercent
     result.categories = model.categories
     result.categoryTotal = model.categoryTotal
+    result.freeTokens = model.freeTokens
   } else {
     result.breakdownError = 'Context breakdown unavailable.'
   }
@@ -471,26 +514,26 @@ function ContextPanel() {
         jsx('span', { children: t('elapsed') })
       ]
     }),
-    jsx(Section, { title: t('windowTitle'), children: jsxs('div', { className: 'flex flex-col gap-2', children: [
-      jsxs('div', { className: 'flex items-baseline justify-between gap-2', children: [
+    jsx(Section, {
+      title: t('windowTitle'),
+      subtitle: shown !== null && shown.contextMax !== null ? t('capacity', formatTokens(shown.contextMax)) : null,
+      children: jsxs('div', { className: 'flex flex-col gap-2', children: [
+      jsxs('div', { className: 'flex items-center justify-between gap-3', children: [
         jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5', children: [
           jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('tokensUsed') }),
-          jsx('span', { className: 'text-[1.25rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.contextUsed === null
+          jsx('span', { className: 'text-[1.5rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.contextUsed === null
             ? '—'
-            : `${formatTokens(shown.contextUsed)} / ${shown.contextMax === null ? '—' : formatTokens(shown.contextMax)}` })
+            : `${formatTokens(shown.contextUsed)} / ${shown.contextMax === null ? '—' : formatTokens(shown.contextMax)}` }),
+          shown !== null && typeof shown.freeTokens === 'number'
+            ? jsx('span', {
+                className: 'text-[0.75rem] text-(--ui-text-tertiary)',
+                title: shown.contextMax === null ? undefined : t('freeHint', formatCount(shown.freeTokens), formatCount(shown.contextMax)),
+                children: `${formatTokens(shown.freeTokens)} ${t('free')}`
+              })
+            : null
         ] }),
-        jsxs('div', { className: 'flex shrink-0 flex-col items-end gap-0.5', children: [
-          jsx('span', { className: 'text-[1.25rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.windowPercent === null ? '—' : `${shown.windowPercent}%` }),
-          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('ofWindow') })
-        ] })
+        jsx(OccupancyRing, { percent: shown === null ? null : shown.windowPercent, label: t('ofWindow') })
       ] }),
-      shown !== null && shown.freeTokens !== null
-        ? jsx('div', {
-            className: 'text-[0.75rem] text-(--ui-text-tertiary)',
-            title: shown.contextMax === null ? undefined : t('freeHint', formatCount(shown.freeTokens), formatCount(shown.contextMax)),
-            children: `${formatTokens(shown.freeTokens)} ${t('free')}`
-          })
-        : null,
       shown !== null && (shown.contextUsed === null || shown.contextMax === null)
         ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('notMeasured') })
         : null,
@@ -505,10 +548,12 @@ function ContextPanel() {
     ] }) }),
     facts.length > 0
       ? jsx(Section, { title: t('factsTitle'), subtitle: t('factsSubtitle'), children: jsx('div', {
-          className: 'grid grid-cols-2 gap-x-2 gap-y-1.5',
-          children: facts.map(fact => jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5' }, [
+          className: 'grid grid-cols-2 gap-1.5',
+          children: facts.map(fact => jsxs('div', {
+            className: 'flex min-w-0 flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary) px-2 py-1.5'
+          }, [
             jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t(fact.labelKey) }),
-            jsx('span', { className: 'truncate text-[0.75rem] tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
+            jsx('span', { className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
           ]))
         }) })
       : null,
