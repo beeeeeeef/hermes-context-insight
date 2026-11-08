@@ -221,5 +221,24 @@ const breakdown = {
   assert.ok(Math.abs(classifiedWidths[0] + classifiedWidths[1] - 100) < 0.01, 'classified bar fills its own scale')
   assert.equal(sandbox.compositionBars({ categories: [], categoryTotal: 0, contextUsed: null, contextMax: null }), null)
 
+  // Placement repair: run once so a stranded pane is re-adopted, then never
+  // again so a deliberate close survives the next reload.
+  const repairCalls = []
+  const repairStore = new Map()
+  const repairCtx = {
+    register: () => () => {},
+    onEvent: () => () => {},
+    onDispose: () => () => {},
+    storage: {
+      get: key => (repairStore.has(key) ? repairStore.get(key) : null),
+      set: (key, value) => { repairStore.set(key, value) }
+    }
+  }
+  sandbox.host.undismissPane = paneId => { repairCalls.push(paneId) }
+  sandbox.plugin.register(repairCtx)
+  assert.deepEqual(repairCalls, ['hermes-context-insight:panel'], 'first load must clear the remembered close')
+  sandbox.plugin.register(repairCtx)
+  assert.equal(repairCalls.length, 1, 'the repair must not run again on later reloads')
+
   console.log('PASS context-insight: model, category denominator, failure state')
 })().catch(error => { console.error(error); process.exitCode = 1 })

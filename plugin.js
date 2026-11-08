@@ -443,5 +443,19 @@ export default {
       data: { placement: 'right', width: '340px' },
       render: () => jsx(ContextPanel, {})
     })
+
+    // One-time placement repair. A pane that was once closed stays remembered
+    // as closed even though it still registers, which strands it outside every
+    // tab strip (the plugin looks loaded but never appears). Clearing that
+    // remembered close lets adoption re-apply the `placement: 'right'` hint.
+    // Runs once, so a later deliberate close is not undone on every reload.
+    try {
+      if (ctx.storage?.get?.('placementRepaired.v1') !== true) {
+        if (typeof host.undismissPane === 'function') host.undismissPane(`${ID}:panel`)
+        ctx.storage?.set?.('placementRepaired.v1', true)
+      }
+    } catch {
+      // Older desktops without storage/undismissPane: leave the layout alone.
+    }
   }
 }
