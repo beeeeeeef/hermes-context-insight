@@ -66,6 +66,23 @@ const MESSAGES = {
     updatedAgo: seconds => `Updated ${seconds}s ago`,
     notReadYet: 'Not read yet',
     session: id => `Session ${id}`,
+    cumulativeTitle: 'Session total',
+    totalTokens: 'Total tokens',
+    inputLabel: 'Input',
+    outputLabel: 'Output',
+    itemsTitle: 'Items by category',
+    items: n => `${n} items`,
+    countUnavailable: 'count not exposed',
+    historyCounts: (u, a, tool) => `${u} user · ${a} assistant · ${tool} tool rows`,
+    historyUnavailable: 'History unavailable; item counts need session.history.',
+    elapsedTitle: 'Timing',
+    totalElapsed: 'Elapsed',
+    recordGaps: 'Record gaps',
+    gapMean: 'avg',
+    modelCallsLabel: 'Model calls',
+    cacheLabel: 'Cache hit',
+    compressionsLabel: 'Compressions',
+    tpsLabel: 'Throughput',
     noSession: 'No active session',
     openChat: 'Open a chat to see its context.'
   },
@@ -114,6 +131,23 @@ const MESSAGES = {
     updatedAgo: seconds => `${seconds} 秒前更新`,
     notReadYet: '尚未读取',
     session: id => `会话 ${id}`,
+    cumulativeTitle: '会话累计',
+    totalTokens: '累计 token',
+    inputLabel: '输入',
+    outputLabel: '输出',
+    itemsTitle: '逐项条数',
+    items: n => `${n} 项`,
+    countUnavailable: '条数未暴露',
+    historyCounts: (u, a, tool) => `用户 ${u} · 助手 ${a} · 工具 ${tool} 条`,
+    historyUnavailable: '历史不可用，条数需要 session.history。',
+    elapsedTitle: '耗时',
+    totalElapsed: '总历时',
+    recordGaps: '记录间隔',
+    gapMean: '平均',
+    modelCallsLabel: '模型调用',
+    cacheLabel: '缓存命中',
+    compressionsLabel: '压缩次数',
+    tpsLabel: '吞吐',
     noSession: '没有活跃会话',
     openChat: '打开一个对话后即可查看上下文。'
   }
@@ -237,7 +271,7 @@ function compositionBars(model) {
 function legendRow(item, index) {
   return {
     className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]',
-    children: [
+    children: kids([
       jsx('span', {
         'aria-hidden': true,
         className: 'mt-1 size-2 shrink-0 rounded-sm',
@@ -254,20 +288,150 @@ function legendRow(item, index) {
           ? (item.tokens === null ? '—' : `≈${formatTokens(item.tokens)}`)
           : `≈${formatTokens(item.tokens)} · ${item.share}%`
       })
-    ]
+    ])
   }
+}
+
+/** Counts history rows by role; the only per-item numbers the plugin can see. */
+function countHistory(rows) {
+  const counts = { user: 0, assistant: 0, tool: 0, messages: 0, total: rows.length }
+  for (const row of rows) {
+    const role = row && typeof row.role === 'string' ? row.role : ''
+    if (role === 'user') counts.user += 1
+    else if (role === 'assistant') counts.assistant += 1
+    else if (role === 'tool') counts.tool += 1
+    if (role === 'user' || role === 'assistant') counts.messages += 1
+  }
+  return counts
+}
+
+/** Intervals between consecutive history timestamps. History tool rows carry no
+ *  duration, so a gap spans more than the tool: it is a record interval. */
+function timelineGaps(rows) {
+  const gaps = []
+  let previous = null
+  for (const row of rows) {
+    const at = finiteNumber(row?.timestamp)
+    if (at === null) continue
+    if (previous !== null && at >= previous) gaps.push(at - previous)
+    previous = at
+  }
+  return gaps
+}
+
+/** Mean and max of recorded gaps, in seconds. */
+function gapStats(gaps) {
+  if (!Array.isArray(gaps) || gaps.length === 0) return { count: 0, mean: null, max: null }
+  let total = 0
+  let max = 0
+  for (const seconds of gaps) {
+    total += seconds
+    if (seconds > max) max = seconds
+  }
+  return { count: gaps.length, mean: total / gaps.length, max }
+}
+
+/** Proportional arcs for the cumulative input/output split. */
+function Donut({ segments, centerValue, centerLabel }) {
+  const radius = 26
+  const thickness = 9
+  const circumference = 2 * Math.PI * radius
+  const total = segments.reduce((sum, segment) => sum + (segment.value > 0 ? segment.value : 0), 0)
+  let offset = 0
+  const arcs = []
+  if (total > 0) {
+    for (const segment of segments) {
+      if (!(segment.value > 0)) continue
+      const length = circumference * (segment.value / total)
+      arcs.push(jsx('circle', {
+        key: segment.id,
+        cx: 32, cy: 32, r: radius, fill: 'none',
+        stroke: segment.color, strokeWidth: thickness,
+        strokeDasharray: `${Math.max(0, length - 1.5)} ${circumference}`,
+        strokeDashoffset: `${-offset}`,
+        transform: 'rotate(-90 32 32)'
+      }))
+      offset += length
+    }
+  }
+  return jsxs('svg', {
+    width: 72, height: 72, viewBox: '0 0 64 64', role: 'img',
+    'aria-label': `${centerLabel}: ${centerValue}`,
+    className: 'shrink-0',
+    children: kids([
+      jsx('circle', { key: 'track', cx: 32, cy: 32, r: radius, fill: 'none', stroke: 'var(--ui-stroke-secondary)', strokeWidth: thickness }),
+      ...arcs,
+      jsx('text', { key: 'v', x: 32, y: 29, textAnchor: 'middle', dominantBaseline: 'central', fontSize: 11, fontWeight: 600, fill: 'var(--ui-text-primary)', children: centerValue }),
+      jsx('text', { key: 'l', x: 32, y: 41, textAnchor: 'middle', dominantBaseline: 'central', fontSize: 7.5, fill: 'var(--ui-text-tertiary)', children: centerLabel })
+    ])
+  })
+}
+
+/** Swatch + label + formatted token value, used beside the donut. */
+function legendLine(color, label, value, key) {
+  return jsxs('div', {
+    key,
+    className: 'flex items-baseline gap-1.5',
+    children: kids([
+      jsx('span', { key: 'sw', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: color } }),
+      jsx('span', { key: 'lb', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: label }),
+      jsx('span', { key: 'vl', className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', children: formatTokens(value) })
+    ])
+  })
+}
+
+/** A labelled statistic cell. */
+function tile(label, value, key) {
+  return jsxs('div', {
+    key,
+    className: 'flex min-w-0 flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary) px-2 py-1.5',
+    children: kids([
+      jsx('span', { key: 'lb', className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: label }),
+      jsx('span', { key: 'vl', className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: value, children: value })
+    ])
+  })
+}
+
+/** Seconds as a compact duration. */
+function formatDuration(seconds) {
+  const value = finiteNumber(seconds)
+  if (value === null) return '—'
+  if (value < 1) return '<1s'
+  if (value < 60) return `${Math.round(value)}s`
+  const minutes = Math.floor(value / 60)
+  const rest = Math.round(value % 60)
+  if (minutes < 60) return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+/** Input/output arcs for the cumulative donut. */
+function inputOutputSegments(cumulative) {
+  if (!cumulative || cumulative.input === null || cumulative.output === null) return []
+  return [
+    { id: 'in', color: 'var(--ui-accent)', value: cumulative.input },
+    { id: 'out', color: '#d6457f', value: cumulative.output }
+  ]
+}
+
+/** Give array children stable positional keys, so no call site can omit one. */
+function kids(nodes) {
+  return nodes.map((node, index) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return node
+    if (node.key !== undefined && node.key !== null) return node
+    return { ...node, key: `k${index}` }
+  })
 }
 
 function Section({ title, subtitle, children, className }) {
   return jsxs('section', {
     className: `rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-3 ${className ?? ''}`,
-    children: [
-      jsxs('div', { className: 'mb-2 flex items-baseline gap-2', children: [
-        jsx('h3', { className: 'text-[0.8125rem] font-medium text-(--ui-text-primary)', children: title }),
-        subtitle ? jsx('span', { className: 'ml-auto shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
-      ] }),
-      children
-    ]
+    children: kids([
+      jsxs('div', { className: 'mb-2 flex items-baseline gap-2', children: kids([
+        jsx('h3', { key: 't', className: 'text-[0.8125rem] font-medium text-(--ui-text-primary)', children: title }),
+        subtitle ? jsx('span', { key: 's', className: 'ml-auto shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
+      ]) }),
+      Array.isArray(children) ? kids(children) : children
+    ])
   })
 }
 
@@ -282,21 +446,22 @@ function OccupancyRing({ percent, label }) {
     role: 'img',
     'aria-label': label,
     className: 'shrink-0',
-    children: [
-      jsx('circle', { cx: 32, cy: 32, r: radius, fill: 'none', stroke: 'var(--ui-stroke-secondary)', strokeWidth: 6 }),
-      safe === null ? null : jsx('circle', {
+    children: kids([
+      jsx('circle', { key: 'track', cx: 32, cy: 32, r: radius, fill: 'none', stroke: 'var(--ui-stroke-secondary)', strokeWidth: 6 }),
+      safe === null ? null : jsx('circle', { key: 'value',
         cx: 32, cy: 32, r: radius, fill: 'none',
         stroke: 'var(--ui-accent)', strokeWidth: 6, strokeLinecap: 'round',
         strokeDasharray: `${circumference}`, strokeDashoffset: `${offset}`,
         transform: 'rotate(-90 32 32)'
       }),
       jsx('text', {
+        key: 'label',
         x: 32, y: 32, textAnchor: 'middle', dominantBaseline: 'central',
         fontSize: safe === null ? 11 : 13, fontWeight: 600,
         fill: 'var(--ui-text-primary)',
         children: safe === null ? '—' : `${safe}%`
       })
-    ]
+    ])
   })
 }
 
@@ -330,14 +495,17 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     cacheHitPct: finiteNumber(usage?.cache_hit_pct),
     avgTps: finiteNumber(usage?.avg_tps),
     avgLatencyS: finiteNumber(usage?.avg_latency_s),
-    freeTokens: null
+    freeTokens: null,
+    counts: null,
+    gaps: []
   }
   if (!sessionId) return result
 
   const params = { session_id: sessionId, profile }
-  const [breakdownResult, activeResult] = await Promise.all([
+  const [breakdownResult, activeResult, historyResult] = await Promise.all([
     request('session.context_breakdown', params).then(value => ({ ok: true, value }), () => ({ ok: false })),
-    request('session.active_list', { profile }).then(value => ({ ok: true, value }), () => ({ ok: false }))
+    request('session.active_list', { profile }).then(value => ({ ok: true, value }), () => ({ ok: false })),
+    request('session.history', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
   ])
 
   if (breakdownResult.ok) {
@@ -351,6 +519,21 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     result.freeTokens = model.freeTokens
   } else {
     result.breakdownError = 'Context breakdown unavailable.'
+  }
+
+  // Item counts: only conversation is countable from here. The other categories
+  // live inside the agent and report tokens without counts, so they stay null.
+  const historyRows = historyResult.ok && Array.isArray(historyResult.value?.messages)
+    ? historyResult.value.messages
+    : null
+  if (historyRows !== null) {
+    const counts = countHistory(historyRows)
+    result.counts = counts
+    result.gaps = timelineGaps(historyRows)
+    result.categories = result.categories.map(item => ({
+      ...item,
+      count: item.id === 'conversation' ? counts.messages : null
+    }))
   }
 
   if (activeResult.ok) {
@@ -525,107 +708,196 @@ function ContextPanel() {
       : cumulative.input === null ? '' : t('ioHint', formatTokens(cumulative.input), formatTokens(cumulative.output))
 
   if (!sessionId) {
-    return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: [
+    return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: kids([
       jsx('div', { className: 'text-[0.8125rem] text-(--ui-text-secondary)', children: t('noSession') }),
       jsx('div', { className: 'text-[0.75rem] text-(--ui-text-tertiary)', children: t('openChat') })
-    ] })
+    ]) })
   }
 
-  return jsxs('div', { className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-2 text-(--ui-text-primary)', children: [
-    jsx('div', { className: 'text-sm font-semibold', children: t('title') }),
-    jsx('p', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('lede') }),
-    jsx('div', {
-      className: 'flex flex-wrap items-baseline gap-x-1.5 text-[0.6875rem] text-(--ui-text-tertiary)',
-      title: cumulativeHint || undefined,
-      children: [
-        jsx('span', { className: 'text-(--ui-text-secondary)', children: cumulative.value }),
-        jsx('span', { children: t('cumulative') }),
-        jsx('span', { 'aria-hidden': true, children: '·' }),
-        jsx('span', { className: 'text-(--ui-text-secondary)', children: shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)) }),
-        jsx('span', { children: t('elapsed') })
-      ]
-    }),
-    jsx(Section, {
-      title: t('windowTitle'),
-      subtitle: shown !== null && shown.contextMax !== null ? t('capacity', formatTokens(shown.contextMax)) : null,
-      children: jsxs('div', { className: 'flex flex-col gap-2', children: [
-      jsxs('div', { className: 'flex items-center justify-between gap-3', children: [
-        jsxs('div', { className: 'flex min-w-0 flex-col gap-0.5', children: [
-          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('tokensUsed') }),
-          jsx('span', { className: 'text-[1.5rem] leading-tight font-semibold tabular-nums', children: shown === null || shown.contextUsed === null
-            ? '—'
-            : `${formatTokens(shown.contextUsed)} / ${shown.contextMax === null ? '—' : formatTokens(shown.contextMax)}` }),
-          shown !== null && typeof shown.freeTokens === 'number'
-            ? jsx('span', {
-                className: 'text-[0.75rem] text-(--ui-text-tertiary)',
-                title: shown.contextMax === null ? undefined : t('freeHint', formatCount(shown.freeTokens), formatCount(shown.contextMax)),
-                children: `${formatTokens(shown.freeTokens)} ${t('free')}`
-              })
-            : null
-        ] }),
-        jsx(OccupancyRing, { percent: shown === null ? null : shown.windowPercent, label: t('ofWindow') })
-      ] }),
-      shown !== null && (shown.contextUsed === null || shown.contextMax === null)
-        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('notMeasured') })
-        : null,
-      shown !== null && shown.categories.length > 0 && bars !== null && bars.windowBar
-        ? bars.windowBar
-        : null,
+  return jsxs('div', {
+    className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-3 text-(--ui-text-primary)',
+    children: kids([
+      jsx('div', { key: 'head', className: 'text-sm font-semibold', children: t('title') }),
+      jsx(Section, {
+        key: 'p1',
+        title: t('cumulativeTitle'),
+        subtitle: cumulative.kind === 'approx' ? t('stateEstimated') : null,
+        children: jsxs('div', {
+          className: 'flex items-center gap-3',
+          children: [
+            jsx(Donut, {
+              key: 'donut',
+              segments: inputOutputSegments(cumulative),
+              centerValue: cumulative.value,
+              centerLabel: t('totalTokens')
+            }),
+            jsxs('div', {
+              key: 'legend',
+              className: 'flex min-w-0 flex-1 flex-col gap-1 text-[0.75rem]',
+              children: [
+                legendLine('var(--ui-accent)', t('inputLabel'), cumulative.input, 'in'),
+                legendLine('#d6457f', t('outputLabel'), cumulative.output, 'out'),
+                cumulativeHint ? jsx('div', { key: 'hint', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: cumulativeHint }) : null
+              ]
+            })
+          ]
+        })
+      }),
+      jsx(Section, {
+        key: 'p2',
+        title: t('windowTitle'),
+        subtitle: shown !== null && shown.contextMax !== null ? t('capacity', formatTokens(shown.contextMax)) : null,
+        children: jsxs('div', {
+          className: 'flex flex-col gap-2',
+          children: [
+            jsxs('div', {
+              key: 'top',
+              className: 'flex items-center justify-between gap-3',
+              children: [
+                jsxs('div', {
+                  key: 'figures',
+                  className: 'flex min-w-0 flex-col gap-0.5',
+                  children: [
+                    jsx('span', { key: 'lbl', className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('tokensUsed') }),
+                    jsx('span', {
+                      key: 'val',
+                      className: 'text-[1.5rem] leading-tight font-semibold tabular-nums',
+                      children: shown === null || shown.contextUsed === null
+                        ? '—'
+                        : `${formatTokens(shown.contextUsed)} / ${shown.contextMax === null ? '—' : formatTokens(shown.contextMax)}`
+                    }),
+                    shown !== null && typeof shown.freeTokens === 'number'
+                      ? jsx('span', {
+                          key: 'free',
+                          className: 'text-[0.75rem] text-(--ui-text-tertiary)',
+                          title: shown.contextMax === null ? undefined : t('freeHint', formatCount(shown.freeTokens), formatCount(shown.contextMax)),
+                          children: `${formatTokens(shown.freeTokens)} ${t('free')}`
+                        })
+                      : null
+                  ]
+                }),
+                jsx(OccupancyRing, { key: 'ring', percent: shown === null ? null : shown.windowPercent, label: t('ofWindow') })
+              ]
+            }),
+            shown !== null && shown.categories.length > 0 && bars !== null && bars.windowBar
+              ? jsx('div', { key: 'wbar', children: bars.windowBar })
+              : null,
+            shown !== null && shown.categories.length > 0 && bars !== null && bars.classifiedBar
+              ? jsx('div', { key: 'cbar', children: bars.classifiedBar })
+              : null,
+            shown !== null && shown.categories.length > 0
+              ? jsx('div', {
+                  key: 'barnote',
+                  className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
+                  children: bars === null || bars.windowBar === null ? t('barNoWindow') : t('barWindow')
+                })
+              : null,
+            shown !== null && shown.categories.length > 0
+              ? jsx('div', {
+                  key: 'classified',
+                  className: 'text-[0.75rem] text-(--ui-text-secondary)',
+                  children: shown.contextUsed === null || shown.contextMax === null
+                    ? `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('occupancyUnavailable')}`
+                    : `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('coverage', Math.round((shown.categoryTotal / shown.contextMax) * 1000) / 10)}`
+                })
+              : null,
+            shown !== null && shown.categories.length > 0
+              ? jsx('div', {
+                  key: 'legend',
+                  className: 'grid grid-cols-2 gap-x-3 gap-y-1.5',
+                  children: shown.categories.map((item, index) => jsx('div', legendRow(item, index), item.id))
+                })
+              : null,
+            shown !== null && shown.categories.length > 0
+              ? jsx('div', { key: 'greynote', className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('greyNote') })
+              : null,
+            shown === null
+              ? jsx('div', { key: 'state', className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? t('reading') : t('contextUnavailable') })
+              : null,
+            shown !== null && shown.breakdownAvailable === false
+              ? jsx('div', { key: 'state', className: 'text-[0.75rem] text-(--ui-text-secondary)', title: shown.breakdownError, children: t('breakdownUnavailable') })
+              : null,
+            shown !== null && shown.breakdownAvailable !== false && shown.categories.length === 0
+              ? jsx('div', { key: 'state', className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('notBuilt') })
+              : null
+          ]
+        })
+      }),
       shown !== null && shown.categories.length > 0
-        ? jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: bars === null || bars.windowBar === null
-          ? t('barNoWindow')
-          : t('barWindow') })
-        : null
-    ] }) }),
-    facts.length > 0
-      ? jsx(Section, { title: t('factsTitle'), subtitle: t('factsSubtitle'), children: jsx('div', {
-          className: 'grid grid-cols-2 gap-1.5',
-          children: facts.map(fact => jsxs('div', {
-            className: 'flex min-w-0 flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary) px-2 py-1.5',
+        ? jsx(Section, {
+            key: 'p3',
+            title: t('itemsTitle'),
             children: [
-              jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t(fact.labelKey) }),
-              jsx('span', { className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: fact.value, children: fact.value })
+              jsx('div', {
+                key: 'rows',
+                className: 'flex flex-col gap-1',
+                children: shown.categories.map((item, index) => jsx('div', {
+                  key: item.id,
+                  className: 'flex items-baseline gap-2 text-[0.75rem]',
+                  children: [
+                    jsx('span', { key: 'dot', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: categoryColor(item.id, index) } }),
+                    jsx('span', { key: 'name', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
+                    jsx('span', {
+                      key: 'count',
+                      className: 'ml-auto shrink-0 tabular-nums ' + (typeof item.count === 'number' ? 'text-(--ui-text-tertiary)' : 'italic text-(--ui-text-quaternary)'),
+                      children: typeof item.count === 'number' ? t('items', formatCount(item.count)) : t('countUnavailable')
+                    })
+                  ]
+                }))
+              }),
+              jsx('div', {
+                key: 'hist',
+                className: 'mt-1 text-[0.6875rem] text-(--ui-text-tertiary)',
+                children: shown.counts !== null
+                  ? t('historyCounts', formatCount(shown.counts.user), formatCount(shown.counts.assistant), formatCount(shown.counts.tool))
+                  : t('historyUnavailable')
+              })
             ]
-          }))
-        }) })
-      : null,
-    jsx(Section, {
-      title: t('compositionTitle'),
-      subtitle: shown === null ? t('stateLoading') : shown.breakdownAvailable === false ? t('stateUnavailable') : t('stateEstimated'),
-      children: shown === null
-        ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? t('reading') : t('contextUnavailable') })
-        : shown.breakdownAvailable === false
-          ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', title: shown.breakdownError, children: t('breakdownUnavailable') })
-          : shown.categories.length === 0
-            ? jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: t('notBuilt') })
-            : jsxs('div', { className: 'flex flex-col gap-1.5', children: [
-              jsx('div', { className: 'text-[0.75rem] text-(--ui-text-secondary)', children: shown.contextUsed === null || shown.contextMax === null
-                ? `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('occupancyUnavailable')}`
-                : `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('coverage', Math.round((shown.categoryTotal / shown.contextMax) * 1000) / 10)}` }),
-              bars !== null && bars.classifiedBar
-                ? jsxs('div', { className: 'flex flex-col gap-1', children: [
-                    bars.classifiedBar,
-                    jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('classifiedNote') })
-                  ] })
-                : null,
-              jsx('div', { className: 'flex flex-col gap-1', children: shown.categories.map((item, index) => jsx('div', legendRow(item, index), item.id)) }),
-              jsx('div', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('greyNote') })
-            ] })
-    }),
-    jsx('button', {
-      type: 'button',
-      disabled: snapshot.loading,
-      className: 'min-h-8 w-fit rounded-md border border-(--ui-stroke-secondary) px-2.5 py-1 text-[0.75rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
-      onClick: () => setRefreshKey(value => value + 1),
-      children: snapshot.loading ? t('refreshing') : t('refresh')
-    }),
-    jsxs('div', { className: 'flex items-center justify-between gap-2 text-[0.6875rem] text-(--ui-text-quaternary)', children: [
-      jsx('span', { children: updatedSeconds === null
-        ? t('notReadYet')
-        : updatedSeconds < 2 ? t('updatedJustNow') : t('updatedAgo', updatedSeconds) }),
-      jsx('span', { children: t('session', String(sessionId).slice(-8)) })
-    ] })
-  ] })
+          })
+        : null,
+      jsx(Section, {
+        key: 'p4',
+        title: t('elapsedTitle'),
+        children: jsx('div', {
+          className: 'grid grid-cols-2 gap-1.5',
+          children: [
+            tile(t('totalElapsed'), shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), 'elapsed'),
+            tile(t('recordGaps'), shown === null || shown.gaps.length === 0 ? '—' : `${t('gapMean')} ${formatDuration(gapStats(shown.gaps).mean)}`, 'gaps'),
+            tile(t('modelCallsLabel'), shown !== null && shown.calls !== null ? formatCount(shown.calls) : '—', 'calls'),
+            tile(t('cacheLabel'), shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—', 'cache'),
+            tile(t('compressionsLabel'), shown !== null && shown.compressions !== null ? formatCount(shown.compressions) : '—', 'compressions'),
+            tile(t('tpsLabel'), shown !== null && shown.avgTps !== null ? `${Math.round(shown.avgTps * 10) / 10} tok/s` : '—', 'tps')
+          ]
+        })
+      }),
+      jsxs('div', {
+        key: 'foot',
+        className: 'flex items-center gap-2 pt-1',
+        children: [
+          jsx('button', {
+            key: 'btn',
+            type: 'button',
+            disabled: snapshot.loading,
+            className: 'min-h-8 w-fit rounded-md border border-(--ui-stroke-secondary) px-2.5 py-1 text-[0.75rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
+            onClick: () => setRefreshKey(value => value + 1),
+            children: snapshot.loading ? t('refreshing') : t('refresh')
+          }),
+          jsx('span', {
+            key: 'age',
+            className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
+            children: updatedSeconds === null
+              ? t('notReadYet')
+              : updatedSeconds < 2 ? t('updatedJustNow') : t('updatedAgo', updatedSeconds)
+          }),
+          jsx('span', {
+            key: 'sid',
+            className: 'ml-auto text-[0.6875rem] text-(--ui-text-quaternary)',
+            children: t('session', String(sessionId).slice(-8))
+          })
+        ]
+      })
+    ])
+  })
 }
 
 /** Pane tab label that follows the app locale, unlike the register-time title. */
@@ -648,7 +920,7 @@ export default {
       id: 'panel',
       area: 'panes',
       title: 'Context',
-      data: { placement: 'right', width: '340px', tabTitle: () => jsx(TabTitle, {}) },
+      data: { placement: 'right', width: '460px', tabTitle: () => jsx(TabTitle, {}) },
       render: () => jsx(ContextPanel, {})
     })
 
