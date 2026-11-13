@@ -7,10 +7,30 @@ bundles ship in `plugin.js` and resolve against `display.language`.
 
 ## What it shows
 
-- **Cumulative tokens** — the session's billed input and output tokens, read from Hermes's live `focusedUsage` state. When Hermes has just restarted and has no live usage snapshot, the panel falls back to the persisted session row's `input_tokens + output_tokens`, prefixed with `≈`. That fallback is approximate and is never presented as `usage.total`.
-- **Elapsed (natural)** — wall-clock time from the session's `started_at` to now. It is not the sum of tool or step durations.
-- **Window occupancy** — the current context occupancy reported by `session.context_breakdown` over the model window.
-- **Current composition** — the breakdown's estimated category tokens, with each category's share of the **estimated classified content** (not of the whole window).
+Four cards, in the order the numbers matter:
+
+1. **Session total** — cumulative input/output tokens for the whole session. Hermes
+   exposes no per-category cumulative split, so the donut is input vs output only.
+2. **Current window** — measured occupancy over a model-property window: the
+   percentage ring, the used/capacity figure, the free remainder, an occupancy bar
+   and the per-category composition.
+3. **Items by category** — counts per category, expandable. Only *conversation*
+   has a real count (from `session.history`); the other categories report tokens
+   without counts, so they say so instead of inventing a number.
+4. **Timing** — natural elapsed time, recorded gaps between history rows, model
+   calls, cache hit rate, compressions and throughput.
+
+Expanding **conversation** lists the recorded messages. Expanding **system prompt**
+shows the full prompt when the last `session.info` event carried it; otherwise it
+says it has not been captured for this session.
+
+### Estimates versus measurements
+
+`context_breakdown` reports each category as an estimate derived from text length,
+while `context_used` is the provider's measured figure. The estimate can come out
+higher or lower, so the panel states both and prints the gap (for example
+"estimate runs 8.7K above the measured usage"). Neither number is adjusted to
+match the other.
 
 ## Data and privacy
 
@@ -21,6 +41,8 @@ The plugin reads Hermes Desktop's public SDK state and three read-only gateway c
 | `host.state.focusedUsage` | live cumulative token counters |
 | `session.context_breakdown` | current occupancy and estimated categories |
 | `session.active_list` | the session's natural start time |
+| `session.history` | conversation counts, message list, recorded gaps |
+| `session.info` (event) | the system prompt, only when Hermes pushes one |
 | `host.listPersistedSessions` | cold-start fallback for persisted `input_tokens` + `output_tokens` |
 
 It does **not** write files, make external network requests, or access a database directly. The cold-start fallback goes through the public SDK, which reads the persisted session row on the host; it is labelled approximate because it is not the same aggregate as live `usage.total` (cache, reasoning and compression lineage can differ). State stays in memory.
@@ -31,6 +53,13 @@ It does **not** write files, make external network requests, or access a databas
 - `context_breakdown.context_used` and `focusedUsage.context_used` are different measurements. This plugin deliberately uses the former for the window figure and never combines the two.
 - A session absent from `active_list`, or without `started_at`, shows elapsed time as unavailable rather than inventing a start.
 - Before the agent has built its context, the breakdown may return no categories; the panel says so instead of drawing zeros.
+- Without a window size the occupancy bar is withheld entirely: any fill would
+  claim an occupancy nobody measured. The window is taken from the breakdown, and
+  from `focusedUsage.context_max` when the breakdown has not been computed yet.
+- The conversation list shows the first 120 records, clipped to 160 characters
+  each, and says so when the session has more.
+- `session.info` is an event, not a query: the system prompt is only available
+  after Hermes pushes one (model switch, new session, and similar).
 
 ## Troubleshooting
 

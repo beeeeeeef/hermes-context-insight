@@ -24,29 +24,14 @@ const MESSAGES = {
   en: {
     tab: 'Context',
     title: 'Context Insight',
-    lede: 'Cumulative usage, natural elapsed time, and what fills the context window.',
     capacity: total => `Capacity ${total}`,
-    cumulative: 'cumulative',
-    elapsed: 'elapsed',
     windowTitle: 'Current window',
     tokensUsed: 'Tokens used',
     ofWindow: 'of window',
     free: 'free',
-    notMeasured: 'Not measured before the model builds context.',
     barWindowAria: 'Estimated share of the context window',
     barWindow: 'Top bar = occupancy of the window. Grey = unclassified and free.',
     barNoWindow: 'Window size unavailable, so no occupancy bar is drawn — the list below is composition only.',
-    factsTitle: 'Session facts',
-    factsSubtitle: 'from Hermes usage',
-    factModel: 'Model',
-    factCalls: 'Model calls',
-    factCompressions: 'Compressions',
-    factCache: 'Cache hit',
-    factTps: 'Avg throughput',
-    factLatency: 'Avg latency',
-    compositionTitle: 'Estimated composition',
-    stateLoading: 'loading',
-    stateUnavailable: 'unavailable',
     stateEstimated: 'estimated',
     reading: 'Reading context…',
     contextUnavailable: 'Context unavailable.',
@@ -55,7 +40,6 @@ const MESSAGES = {
     classified: 'Classified estimate',
     coverage: pct => `≈${pct}% of window`,
     occupancyUnavailable: 'occupancy unavailable',
-    classifiedNote: 'Share of classified content, so small categories stay readable.',
     greyNote: 'Grey is content the breakdown did not attribute.',
     refresh: 'Refresh',
     refreshing: 'Refreshing…',
@@ -98,38 +82,23 @@ const MESSAGES = {
     expand: 'Show detail',
     collapse: 'Hide detail',
     noMessages: 'No messages recorded yet.',
+    listTruncated: (shown, total) => `Showing the first ${shown} of ${total} records.`,
     promptUnavailable: 'Not captured for this session yet — it arrives with a session update.',
     promptCaptured: 'Captured from the last session update.',
-    messageList: 'Messages',
     noSession: 'No active session',
     openChat: 'Open a chat to see its context.'
   },
   zh: {
     tab: '上下文',
     title: '上下文洞察',
-    lede: '累计用量、自然历时，以及当前上下文都由什么占着。',
     capacity: total => `容量 ${total}`,
-    cumulative: '累计',
-    elapsed: '历时',
     windowTitle: '当前窗口',
     tokensUsed: '已用 token',
     ofWindow: '占窗口',
     free: '剩余',
-    notMeasured: '模型尚未构建上下文，暂无测量值。',
     barWindowAria: '窗口占用比例的估算',
     barWindow: '上方彩条 = 窗口占用比例；灰色为未分类与空闲部分。',
     barNoWindow: '窗口容量未知，因此不绘制占用彩条；下方仅为构成明细。',
-    factsTitle: '会话统计',
-    factsSubtitle: '数据来自 Hermes',
-    factModel: '模型',
-    factCalls: '模型调用',
-    factCompressions: '压缩次数',
-    factCache: '缓存命中',
-    factTps: '平均吞吐',
-    factLatency: '平均延迟',
-    compositionTitle: '估算组成',
-    stateLoading: '读取中',
-    stateUnavailable: '不可用',
     stateEstimated: '估算',
     reading: '正在读取上下文…',
     contextUnavailable: '上下文不可用。',
@@ -138,7 +107,6 @@ const MESSAGES = {
     classified: '分类合计约',
     coverage: pct => `约占窗口 ${pct}%`,
     occupancyUnavailable: '占用未知',
-    classifiedNote: '按已分类内容计算占比，因此小类别也能看清。',
     greyNote: '灰色部分为未能归类的内容。',
     refresh: '刷新',
     refreshing: '刷新中…',
@@ -181,9 +149,9 @@ const MESSAGES = {
     expand: '展开明细',
     collapse: '收起明细',
     noMessages: '还没有记录到消息。',
+    listTruncated: (shown, total) => `仅显示前 ${shown} 条，共 ${total} 条。`,
     promptUnavailable: '本次会话暂未获取；它只在会话信息更新时带出来。',
     promptCaptured: '来自最近一次会话信息更新。',
-    messageList: '消息列表',
     noSession: '没有活跃会话',
     openChat: '打开一个对话后即可查看上下文。'
   }
@@ -519,6 +487,10 @@ function categoryDetail(item, model, systemPrompt, t) {
   if (item.id === 'conversation') {
     const messages = Array.isArray(model.messages) ? model.messages : []
     if (messages.length === 0) return { nodes: [jsx('div', { key: 'n', children: t('noMessages') })] }
+    const total = model.counts ? model.counts.total : messages.length
+    const truncated = total > messages.length
+      ? [jsx('div', { key: 'more', className: 'text-(--ui-text-quaternary)', children: t('listTruncated', formatCount(messages.length), formatCount(total)) })]
+      : []
     return {
       nodes: messages.map((message, index) => jsxs('div', {
         key: `m${index}`,
@@ -527,7 +499,7 @@ function categoryDetail(item, model, systemPrompt, t) {
           jsx('span', { key: 'r', className: 'w-14 shrink-0 text-(--ui-text-quaternary)', children: message.role }),
           jsx('span', { key: 'x', className: 'min-w-0 break-words', children: message.text || '—' })
         ]
-      }))
+      })).concat(truncated)
     }
   }
   if (item.id === 'system_prompt') {
@@ -919,7 +891,11 @@ function ContextPanel() {
                       : null
                   ]
                 }),
-                jsx(OccupancyRing, { key: 'ring', percent: shown === null ? null : shown.windowPercent, label: t('ofWindow') })
+                jsx(OccupancyRing, {
+                  key: 'ring',
+                  percent: shown === null ? null : shown.windowPercent,
+                  label: `${t('ofWindow')} ${shown === null || shown.windowPercent === null ? '—' : `${shown.windowPercent}%`}`
+                })
               ]
             }),
             shown !== null && shown.categories.length > 0 && bars !== null && bars.windowBar
