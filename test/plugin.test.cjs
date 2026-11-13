@@ -44,6 +44,7 @@ function load(requests) {
     useValue: value => (typeof value?.get === 'function' ? value.get() : value),
     useState: initial => [initial, () => {}],
     useEffect: () => {},
+    useRef: initial => ({ current: initial }),
     setInterval: () => 0,
     clearInterval: () => {},
     jsx: (type, props) => ({ $$typeof: Symbol.for('react.element'), type, props }),
@@ -280,6 +281,27 @@ const breakdown = {
   assert.equal(live.kind, 'live')
   assert.equal(live.value, '255K')
   assert.equal(live.input, 125988)
+  // History is the expensive call: a tick-only refresh must not repeat it and
+  // must keep the counts already read.
+  let historyCalls = 0
+  const countingRequest = async method => {
+    if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 91000 }] }
+    if (method === 'session.active_list') return { sessions: [] }
+    if (method === 'session.history') { historyCalls += 1; return { messages: [{ role: 'user', timestamp: 1, text: 'hi' }] } }
+    throw new Error(method)
+  }
+  const firstLoad = await sandbox.loadSessionModel({ request: countingRequest, sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now() })
+  assert.equal(historyCalls, 1, 'first load reads history')
+  const tickLoad = await sandbox.loadSessionModel({ request: countingRequest, sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now(), includeHistory: false, previous: firstLoad })
+  assert.equal(historyCalls, 1, 'a tick refresh must not call session.history again')
+  assert.equal(tickLoad.counts.messages, 1, 'previous counts survive the tick refresh')
+  assert.equal(tickLoad.messages.length, 1, 'previous message list survives the tick refresh')
+
+  // The timing card is collapsible, and the gap tile explains itself on hover
+  // instead of relying on a label the reader has to decode.
+  const hintedTile = sandbox.tile('L', 'V', 'k', 'HINT')
+  assert.equal(hintedTile.props.children[1].props.title, 'HINT')
+
   // Estimate vs measurement: the gap is reported rather than hidden.
   const gap = await sandbox.loadSessionModel({
     request: async method => {

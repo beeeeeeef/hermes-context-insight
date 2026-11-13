@@ -10,7 +10,7 @@
  * 只读：不写盘、不发起外部网络请求、不直接访问数据库；不改变会话内容。
  */
 import { atom, host, usePluginI18n, useValue } from '@hermes/plugin-sdk'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-context-insight'
@@ -64,6 +64,8 @@ const MESSAGES = {
     totalElapsed: 'Elapsed',
     recordGaps: 'Record gaps',
     gapMean: 'avg',
+    gapHint: 'Interval between two consecutive history records. It spans tool execution plus whatever came after it, so it is not the tool\'s own runtime.',
+    timingSummary: (elapsed, gaps, cache) => `${elapsed} · gaps ${gaps} · cache ${cache}`,
     modelCallsLabel: 'Model calls',
     cacheLabel: 'Cache hit',
     compressionsLabel: 'Compressions',
@@ -131,6 +133,8 @@ const MESSAGES = {
     totalElapsed: '总历时',
     recordGaps: '记录间隔',
     gapMean: '平均',
+    gapHint: '相邻两条历史记录之间的间隔，包含工具执行以及其后的所有等待，因此不等于工具本身的运行时长。',
+    timingSummary: (elapsed, gaps, cache) => `${elapsed} · 间隔 ${gaps} · 缓存 ${cache}`,
     modelCallsLabel: '模型调用',
     cacheLabel: '缓存命中',
     compressionsLabel: '压缩次数',
@@ -412,13 +416,13 @@ function legendLine(color, label, value, key) {
 }
 
 /** A labelled statistic cell. */
-function tile(label, value, key) {
+function tile(label, value, key, hint) {
   return jsxs('div', {
     key,
     className: 'flex min-w-0 flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary) px-2 py-1.5',
     children: kids([
       jsx('span', { key: 'lb', className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: label }),
-      jsx('span', { key: 'vl', className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: value, children: value })
+      jsx('span', { key: 'vl', className: 'truncate text-[0.75rem] font-medium tabular-nums text-(--ui-text-secondary)', title: hint || value, children: value })
     ])
   })
 }
@@ -518,15 +522,31 @@ function categoryDetail(item, model, systemPrompt, t) {
   return null
 }
 
-function Section({ title, subtitle, children, className }) {
+function Section({ title, subtitle, children, className, collapsible, open, onToggle, summary }) {
+  const headerCells = kids([
+    jsx('h3', { key: 't', className: 'text-[0.8125rem] font-medium text-(--ui-text-primary)', children: title }),
+    subtitle ? jsx('span', { key: 's', className: 'ml-auto shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
+  ])
+  const header = collapsible
+    ? jsx('button', {
+        type: 'button',
+        'aria-expanded': Boolean(open),
+        className: `flex w-full items-baseline gap-2 rounded-sm text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent) ${open ? 'mb-2' : ''}`,
+        onClick: onToggle,
+        children: kids([
+          jsx('span', { key: 'c', 'aria-hidden': true, className: 'w-3 shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)', children: open ? '▾' : '▸' }),
+          ...headerCells
+        ])
+      })
+    : jsx('div', { className: 'mb-2 flex items-baseline gap-2', children: headerCells })
   return jsxs('section', {
     className: `rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-3 ${className ?? ''}`,
     children: kids([
-      jsxs('div', { className: 'mb-2 flex items-baseline gap-2', children: kids([
-        jsx('h3', { key: 't', className: 'text-[0.8125rem] font-medium text-(--ui-text-primary)', children: title }),
-        subtitle ? jsx('span', { key: 's', className: 'ml-auto shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)', children: subtitle }) : null
-      ]) }),
-      Array.isArray(children) ? kids(children) : children
+      header,
+      !open && collapsible && summary
+        ? jsx('div', { className: 'mt-1 text-[0.6875rem] text-(--ui-text-tertiary)', children: summary })
+        : null,
+      collapsible && !open ? null : (Array.isArray(children) ? kids(children) : children)
     ])
   })
 }
@@ -565,7 +585,7 @@ function OccupancyRing({ percent, label }) {
  * 读取当前聚焦会话的两个只读接口，并归一为面板模型。
  * 任一接口失败都保留其余数据，不把失败解释为零。
  */
-async function loadSessionModel({ request, sessionId, storedSessionId, profile, usage, now, listPersistedSessions }) {
+async function loadSessionModel({ request, sessionId, storedSessionId, profile, usage, now, listPersistedSessions, includeHistory = true, previous = null }) {
   const result = {
     cumulativeTotal: finiteNumber(usage?.total),
     cumulativeInput: finiteNumber(usage?.input),
@@ -603,7 +623,9 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
   const [breakdownResult, activeResult, historyResult] = await Promise.all([
     request('session.context_breakdown', params).then(value => ({ ok: true, value }), () => ({ ok: false })),
     request('session.active_list', { profile }).then(value => ({ ok: true, value }), () => ({ ok: false })),
-    request('session.history', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
+    includeHistory
+      ? request('session.history', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
+      : Promise.resolve({ ok: false, skipped: true })
   ])
 
   if (breakdownResult.ok) {
@@ -621,6 +643,17 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
 
   // Item counts: only conversation is countable from here. The other categories
   // live inside the agent and report tokens without counts, so they stay null.
+  if (!includeHistory && previous) {
+    // A tick-only refresh: history is the expensive call, so the previously
+    // read counts stand until the user refreshes or switches session.
+    result.counts = previous.counts ?? null
+    result.gaps = Array.isArray(previous.gaps) ? previous.gaps : []
+    result.messages = Array.isArray(previous.messages) ? previous.messages : []
+    result.categories = result.categories.map(item => ({
+      ...item,
+      count: item.id === 'conversation' && result.counts ? result.counts.messages : null
+    }))
+  }
   const historyRows = historyResult.ok && Array.isArray(historyResult.value?.messages)
     ? historyResult.value.messages
     : null
@@ -761,6 +794,10 @@ function ContextPanel() {
   const tick = useValue($tick)
   const [refreshKey, setRefreshKey] = useState(0)
   const [openCategory, setOpenCategory] = useState(null)
+  const [openTiming, setOpenTiming] = useState(false)
+  // History is refetched only when the session changes or the user refreshes;
+  // a message completing keeps the counts already read.
+  const historyEpoch = useRef('')
   const systemPrompts = useValue($systemPrompts)
   const systemPrompt = sessionId ? (systemPrompts[sessionId] ?? null) : null
   const [now, setNow] = useState(() => Date.now())
@@ -774,6 +811,9 @@ function ContextPanel() {
     let cancelled = false
     const previous = $snapshot.get()
     const sameSession = previous.sessionId === sessionId && previous.profile === profile
+    const epoch = `${sessionId}|${profile}|${refreshKey}`
+    const includeHistory = historyEpoch.current !== epoch
+    if (includeHistory) historyEpoch.current = epoch
     $snapshot.set({ ...previous, sessionId, profile, data: sameSession ? previous.data : null, loading: true, error: '' })
     loadSessionModel({
       request: host.request,
@@ -782,6 +822,8 @@ function ContextPanel() {
       profile,
       usage,
       now: Date.now(),
+      includeHistory,
+      previous: sameSession ? previous.data : null,
       listPersistedSessions: typeof host.listPersistedSessions === 'function' ? host.listPersistedSessions.bind(host) : undefined
     })
       .then(data => {
@@ -1016,16 +1058,23 @@ function ContextPanel() {
       jsx(Section, {
         key: 'p4',
         title: t('elapsedTitle'),
+        collapsible: true,
+        open: openTiming,
+        onToggle: () => setOpenTiming(value => !value),
+        summary: t('timingSummary',
+          shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)),
+          shown === null || shown.gaps.length === 0 ? '—' : formatDuration(gapStats(shown.gaps).mean),
+          shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—'),
         children: jsx('div', {
           className: 'grid grid-cols-2 gap-1.5',
-          children: [
+          children: kids([
             tile(t('totalElapsed'), shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), 'elapsed'),
-            tile(t('recordGaps'), shown === null || shown.gaps.length === 0 ? '—' : `${t('gapMean')} ${formatDuration(gapStats(shown.gaps).mean)}`, 'gaps'),
+            tile(t('recordGaps'), shown === null || shown.gaps.length === 0 ? '—' : `${t('gapMean')} ${formatDuration(gapStats(shown.gaps).mean)}`, 'gaps', t('gapHint')),
             tile(t('modelCallsLabel'), shown !== null && shown.calls !== null ? formatCount(shown.calls) : '—', 'calls'),
             tile(t('cacheLabel'), shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—', 'cache'),
             tile(t('compressionsLabel'), shown !== null && shown.compressions !== null ? formatCount(shown.compressions) : '—', 'compressions'),
             tile(t('tpsLabel'), shown !== null && shown.avgTps !== null ? `${Math.round(shown.avgTps * 10) / 10} tok/s` : '—', 'tps')
-          ]
+          ])
         })
       }),
       jsxs('div', {
