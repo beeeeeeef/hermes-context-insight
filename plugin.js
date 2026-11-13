@@ -92,6 +92,15 @@ const MESSAGES = {
     catSkills: 'Skills index',
     catRules: 'Rules',
     catMcp: 'MCP tools',
+    estimateNote: 'Category figures are estimates.',
+    deltaHigher: v => `Estimate runs ${v} above the measured usage`,
+    deltaLower: v => `Estimate runs ${v} below the measured usage`,
+    expand: 'Show detail',
+    collapse: 'Hide detail',
+    noMessages: 'No messages recorded yet.',
+    promptUnavailable: 'Not captured for this session yet — it arrives with a session update.',
+    promptCaptured: 'Captured from the last session update.',
+    messageList: 'Messages',
     noSession: 'No active session',
     openChat: 'Open a chat to see its context.'
   },
@@ -166,6 +175,15 @@ const MESSAGES = {
     catSkills: '技能索引',
     catRules: '规则',
     catMcp: 'MCP 工具',
+    estimateNote: '分类数值为估算。',
+    deltaHigher: v => `估算比实测高 ${v}`,
+    deltaLower: v => `估算比实测低 ${v}`,
+    expand: '展开明细',
+    collapse: '收起明细',
+    noMessages: '还没有记录到消息。',
+    promptUnavailable: '本次会话暂未获取；它只在会话信息更新时带出来。',
+    promptCaptured: '来自最近一次会话信息更新。',
+    messageList: '消息列表',
     noSession: '没有活跃会话',
     openChat: '打开一个对话后即可查看上下文。'
   }
@@ -173,6 +191,14 @@ const MESSAGES = {
 
 const $snapshot = atom({ sessionId: null, profile: null, data: null, loading: false, error: '', at: 0 })
 const $tick = atom(0)
+
+/**
+ * Opportunistic capture, keyed by runtime session id. `session.info` is the only
+ * place the full system prompt ever crosses into the renderer, and it is an
+ * EVENT — the plugin cannot ask for it. So it is cached when it happens to
+ * arrive and honestly reported as absent otherwise.
+ */
+const $systemPrompts = atom({})
 
 /** 分类估算合计：只作为分类占比的分母。 */
 function sumCategories(categories) {
@@ -305,6 +331,28 @@ function legendRow(item, index, t) {
       })
     ])
   }
+}
+
+/** Bounded, display-only view of the conversation. Text is truncated, never
+ *  rewritten; the panel shows what the session actually recorded. */
+function summariseMessages(rows, limit = 120, clip = 160) {
+  const out = []
+  for (const row of rows) {
+    if (out.length >= limit) break
+    const role = row && typeof row.role === 'string' ? row.role : 'unknown'
+    const at = finiteNumber(row?.timestamp)
+    let text = ''
+    if (typeof row?.text === 'string') text = row.text
+    else if (typeof row?.content === 'string') text = row.content
+    else if (role === 'tool') {
+      const name = typeof row?.name === 'string' ? row.name : 'tool'
+      text = name
+    }
+    text = text.replace(/\s+/g, ' ').trim()
+    if (text.length > clip) text = `${text.slice(0, clip)}…`
+    out.push({ role, at, text })
+  }
+  return out
 }
 
 /** Counts history rows by role; the only per-item numbers the plugin can see. */
@@ -461,6 +509,43 @@ function categoryLabel(item, t) {
   return item?.id ?? ''
 }
 
+/**
+ * Detail body for one category row, or null when this category has no detail
+ * the plugin can honestly show. Conversation comes from session.history; the
+ * system prompt is whatever the last `session.info` event carried.
+ */
+function categoryDetail(item, model, systemPrompt, t) {
+  if (!item || !model) return null
+  if (item.id === 'conversation') {
+    const messages = Array.isArray(model.messages) ? model.messages : []
+    if (messages.length === 0) return { nodes: [jsx('div', { key: 'n', children: t('noMessages') })] }
+    return {
+      nodes: messages.map((message, index) => jsxs('div', {
+        key: `m${index}`,
+        className: 'flex gap-1.5',
+        children: [
+          jsx('span', { key: 'r', className: 'w-14 shrink-0 text-(--ui-text-quaternary)', children: message.role }),
+          jsx('span', { key: 'x', className: 'min-w-0 break-words', children: message.text || '—' })
+        ]
+      }))
+    }
+  }
+  if (item.id === 'system_prompt') {
+    if (!systemPrompt) return { nodes: [jsx('div', { key: 'n', children: t('promptUnavailable') })] }
+    return {
+      nodes: [
+        jsx('div', { key: 'note', className: 'text-(--ui-text-quaternary)', children: t('promptCaptured') }),
+        jsx('pre', {
+          key: 'text',
+          className: 'm-0 whitespace-pre-wrap break-words font-mono text-[0.6875rem]',
+          children: systemPrompt
+        })
+      ]
+    }
+  }
+  return null
+}
+
 function Section({ title, subtitle, children, className }) {
   return jsxs('section', {
     className: `rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-surface-background) p-3 ${className ?? ''}`,
@@ -536,7 +621,9 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     avgLatencyS: finiteNumber(usage?.avg_latency_s),
     freeTokens: null,
     counts: null,
-    gaps: []
+    gaps: [],
+    estimateDelta: null,
+    messages: []
   }
   if (!sessionId) return result
 
@@ -573,6 +660,13 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
       ...item,
       count: item.id === 'conversation' ? counts.messages : null
     }))
+    result.messages = summariseMessages(historyRows)
+  }
+
+  // How far the category ESTIMATE drifts from the measured occupancy. The two
+  // are different measurements, so the honest presentation is the gap itself.
+  if (result.contextUsed !== null && result.categoryTotal > 0) {
+    result.estimateDelta = result.categoryTotal - result.contextUsed
   }
 
   if (activeResult.ok) {
@@ -694,6 +788,9 @@ function ContextPanel() {
   const snapshot = useValue($snapshot)
   const tick = useValue($tick)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [openCategory, setOpenCategory] = useState(null)
+  const systemPrompts = useValue($systemPrompts)
+  const systemPrompt = sessionId ? (systemPrompts[sessionId] ?? null) : null
   const [now, setNow] = useState(() => Date.now())
   const usageModel = buildModel({ usage })
 
@@ -843,8 +940,17 @@ function ContextPanel() {
                   key: 'classified',
                   className: 'text-[0.75rem] text-(--ui-text-secondary)',
                   children: shown.contextUsed === null || shown.contextMax === null
-                    ? `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('occupancyUnavailable')}`
-                    : `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('coverage', Math.round((shown.categoryTotal / shown.contextMax) * 1000) / 10)}`
+                    ? `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('occupancyUnavailable')} · ${t('estimateNote')}`
+                    : `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('coverage', Math.round((shown.categoryTotal / shown.contextMax) * 1000) / 10)} · ${t('estimateNote')}`
+                })
+              : null,
+            shown !== null && typeof shown.estimateDelta === 'number' && shown.estimateDelta !== 0
+              ? jsx('div', {
+                  key: 'delta',
+                  className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
+                  children: shown.estimateDelta > 0
+                    ? t('deltaHigher', formatTokens(shown.estimateDelta))
+                    : t('deltaLower', formatTokens(-shown.estimateDelta))
                 })
               : null,
             shown !== null && shown.categories.length > 0
@@ -877,10 +983,16 @@ function ContextPanel() {
               jsx('div', {
                 key: 'rows',
                 className: 'flex flex-col gap-1',
-                children: shown.categories.map((item, index) => jsx('div', {
-                  key: item.id,
-                  className: 'flex items-baseline gap-2 text-[0.75rem]',
-                  children: [
+                children: shown.categories.map((item, index) => {
+                  const open = openCategory === item.id
+                  const detail = categoryDetail(item, shown, systemPrompt, t)
+                  const cells = [
+                    jsx('span', {
+                      key: 'caret',
+                      'aria-hidden': true,
+                      className: 'w-3 shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)',
+                      children: detail ? (open ? '▾' : '▸') : ''
+                    }),
                     jsx('span', { key: 'dot', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: categoryColor(item.id, index) } }),
                     jsx('span', { key: 'name', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: categoryLabel(item, t) }),
                     jsx('span', {
@@ -889,7 +1001,31 @@ function ContextPanel() {
                       children: typeof item.count === 'number' ? t('items', formatCount(item.count)) : t('countUnavailable')
                     })
                   ]
-                }))
+                  return jsxs('div', {
+                    key: item.id,
+                    className: 'flex flex-col gap-1',
+                    children: [
+                      detail
+                        ? jsx('button', {
+                            key: 'head',
+                            type: 'button',
+                            'aria-expanded': open,
+                            'aria-label': `${open ? t('collapse') : t('expand')} ${categoryLabel(item, t)}`,
+                            className: 'flex w-full items-baseline gap-2 rounded-sm text-left text-[0.75rem] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
+                            onClick: () => setOpenCategory(current => (current === item.id ? null : item.id)),
+                            children: cells
+                          })
+                        : jsx('div', { key: 'head', className: 'flex items-baseline gap-2 text-[0.75rem]', children: cells }),
+                      detail && open
+                        ? jsx('div', {
+                            key: 'body',
+                            className: 'ml-5 flex max-h-56 flex-col gap-1 overflow-auto rounded-md bg-(--ui-bg-tertiary) p-2 text-[0.6875rem] text-(--ui-text-secondary)',
+                            children: detail.nodes
+                          })
+                        : null
+                    ]
+                  })
+                })
               }),
               jsx('div', {
                 key: 'hist',
@@ -958,6 +1094,15 @@ export default {
   defaultEnabled: true,
   register(ctx) {
     ctx.i18n?.register?.(MESSAGES)
+    ctx.onEvent('session.info', event => {
+      const sessionId = event?.session_id
+      const prompt = event?.payload?.system_prompt
+      if (!sessionId || typeof prompt !== 'string' || !prompt) return
+      const current = $systemPrompts.get()
+      if (current[sessionId] === prompt) return
+      // Keep only the focused session so a long run cannot accumulate prompts.
+      $systemPrompts.set({ [sessionId]: prompt })
+    })
     ctx.onEvent('message.complete', event => {
       if (event?.session_id !== host.state.focusedSessionId.get()) return
       $tick.set($tick.get() + 1)

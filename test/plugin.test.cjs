@@ -280,6 +280,29 @@ const breakdown = {
   assert.equal(live.kind, 'live')
   assert.equal(live.value, '255K')
   assert.equal(live.input, 125988)
+  // Estimate vs measurement: the gap is reported rather than hidden.
+  const gap = await sandbox.loadSessionModel({
+    request: async method => {
+      if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 106000 }] }
+      if (method === 'session.active_list') return { sessions: [] }
+      if (method === 'session.history') return { messages: [{ role: 'user', timestamp: 1, text: 'hi' }] }
+      throw new Error(method)
+    },
+    sessionId: 'runtime-1', profile: 'tech', usage: { total: 1 }, now: Date.now()
+  })
+  assert.equal(gap.estimateDelta, 9000, 'estimate drift is surfaced as a number')
+  assert.equal(gap.messages.length, 1, 'the conversation is summarised for the detail view')
+  assert.equal(gap.messages[0].role, 'user')
+
+  // Detail bodies: conversation lists real rows, the system prompt is honest
+  // about being absent, and categories with no detail expose none at all.
+  const detailModel = { messages: [{ role: 'user', at: 1, text: '你好' }] }
+  const identT = key => key
+  assert.ok(sandbox.categoryDetail({ id: 'conversation' }, detailModel, null, identT).nodes.length === 1)
+  assert.equal(sandbox.categoryDetail({ id: 'system_prompt' }, detailModel, null, identT).nodes[0].props.children, 'promptUnavailable')
+  assert.equal(sandbox.categoryDetail({ id: 'system_prompt' }, detailModel, '# Soul', identT).nodes.length, 2)
+  assert.equal(sandbox.categoryDetail({ id: 'tool_definitions' }, detailModel, null, identT), null)
+
   // Window length is a model property: when the breakdown reports 0 (no agent
   // built yet) the usage snapshot may still know it, and that is legitimate.
   const fallback = await sandbox.loadSessionModel({
