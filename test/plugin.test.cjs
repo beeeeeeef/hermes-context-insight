@@ -17,6 +17,7 @@ function load(requests) {
     register: item => { created.push(item); return () => {} },
     onEvent: () => () => {},
     storage: {},
+    i18n: { register: bundles => { ctx.bundles = bundles; return () => {} } },
     host: {
       state: {
         focusedSessionId: atom('runtime-1'),
@@ -43,10 +44,12 @@ function load(requests) {
     useValue: value => (typeof value?.get === 'function' ? value.get() : value),
     useState: initial => [initial, () => {}],
     useEffect: () => {},
+    useRef: initial => ({ current: initial }),
     setInterval: () => 0,
     clearInterval: () => {},
-    jsx: (type, props) => ({ type, props }),
-    jsxs: (type, props) => ({ type, props }),
+    jsx: (type, props) => ({ $$typeof: Symbol.for('react.element'), type, props }),
+    jsxs: (type, props) => ({ $$typeof: Symbol.for('react.element'), type, props }),
+    usePluginI18n: () => (key, ...args) => (typeof args[0] === 'undefined' ? key : `${key}:${args.join(',')}`),
     console,
     Date,
     Map,
@@ -98,6 +101,16 @@ const breakdown = {
   assert.equal(created.length, 1)
   assert.equal(created[0].area, 'panes')
 
+  // Localization: both bundles registered, same key set, and the tab label is
+  // resolved at render time so it follows the app locale.
+  assert.ok(ctx.bundles && ctx.bundles.en && ctx.bundles.zh, 'en and zh bundles registered')
+  const enKeys = Object.keys(ctx.bundles.en).sort()
+  const zhKeys = Object.keys(ctx.bundles.zh).sort()
+  assert.equal(zhKeys.join(','), enKeys.join(','), 'zh bundle must cover every en key')
+  assert.equal(created[0].data.tabTitle().type, sandbox.TabTitle)
+  const labels = created[0].data.tabTitle()
+  assert.ok(labels)
+
   const model = await sandbox.loadSessionModel({
     request: ctx.host.request,
     sessionId: 'runtime-1',
@@ -114,6 +127,13 @@ const breakdown = {
   assert.equal(model.elapsedKnown, true)
   assert.equal(model.elapsedMs, 3600000)
   assert.equal(sandbox.elapsedAt(model, 1000, 5000), 3604000)
+  // The snapshot itself must carry the counters the panel renders after a
+  // refresh; they used to be dropped, which produced "NaN 剩余" and an empty
+  // Session facts card.
+  assert.equal(typeof model.freeTokens, 'number', 'freeTokens must survive the loader')
+  assert.equal(model.freeTokens, 1000000 - 28568)
+  assert.equal(model.calls, null, 'absent counters stay null, never zero')
+  assert.equal(sandbox.formatTokens(Number.NaN), '—', 'NaN must not render as a number')
 
   const missing = await sandbox.loadSessionModel({
     request: async () => { throw new Error('down') },
@@ -140,6 +160,68 @@ const breakdown = {
   assert.equal(cold.contextMax, null)
   assert.equal(cold.windowPercent, null)
   assert.equal(cold.categoryTotal, 236000, 'estimated categories remain visible while occupancy is unavailable')
+  assert.equal(cold.freeTokens, null, 'no free-token figure without a measured window')
+  assert.equal(sandbox.presentFacts(cold).length, 0, 'no facts invented when Hermes reports none')
+
+  const rich = sandbox.buildModel({
+    usage: {
+      total: 254688, input: 125988, output: 3132,
+      model: 'deepseek-v4.1-flash', calls: 708, compressions: 1,
+      cache_hit_pct: 90.57, avg_tps: 61.24, avg_latency_s: 1.83
+    },
+    breakdown: { context_used: 121000, context_max: 1050000, categories: [] },
+    now: 100000
+  })
+  assert.equal(rich.freeTokens, 929000, 'free = capacity - used')
+  const facts = sandbox.presentFacts(rich)
+  const factOf = key => facts.find(fact => fact.labelKey === key)
+  assert.equal(factOf('factModel').value, 'deepseek-v4.1-flash')
+  assert.equal(factOf('factCalls').value, '708')
+  assert.equal(factOf('factCompressions').value, '1')
+  assert.equal(factOf('factCache').value, '90.6%', 'percent rounded to one decimal')
+  assert.equal(factOf('factTps').value, '61.2 tok/s')
+  assert.equal(factOf('factLatency').value, '1.8s')
+  assert.equal(facts.length, 6)
+  assert.equal(facts.filter(fact => fact.value === '—').length, 0, 'no placeholder rows')
+
+  // Regression: legend rows must keep dot + label + value. A row built as
+  // jsxs(type, props, children) loses its children to the key argument.
+  const row = sandbox.legendRow({ id: 'conversation', label: '对话', tokens: 122000, share: 86.5 }, 4)
+  assert.equal(row.children.length, 3, 'a legend row keeps three cells')
+  for (const cell of row.children) {
+    assert.equal(cell.$$typeof, Symbol.for('react.element'), 'cells must be React elements, not plain objects')
+  }
+  assert.equal(row.children[0].props.style.backgroundColor, '#1f9d63', 'dot carries the semantic colour')
+  assert.equal(row.children[1].props.children, '对话', 'label survives')
+  assert.equal(row.children[2].props.children, '≈122K · 86.5%', 'value survives')
+
+  const partial = sandbox.buildModel({ usage: { total: 10, calls: 3 }, breakdown: null })
+  assert.equal(sandbox.presentFacts(partial).length, 1, 'only reported counters become rows')
+
+  // Regression: fact tiles are built with jsxs(type, props) — children passed as
+  // a third argument are silently dropped, which rendered six blank tiles.
+  ctx.host.state.focusedUsage.set({
+    total: 82000, input: 70000, output: 12000,
+    model: 'deepseek-v4.1-flash', calls: 708, compressions: 1,
+    cache_hit_pct: 90.57, avg_tps: 61.24, avg_latency_s: 1.83
+  })
+  const panel = sandbox.ContextPanel()
+  const walk = (node, predicate, out = []) => {
+    if (!node || typeof node !== 'object') return out
+    if (Array.isArray(node)) { node.forEach(child => walk(child, predicate, out)); return out }
+    if (node.props) {
+      if (predicate(node)) out.push(node)
+      if (node.props.children !== undefined) walk(node.props.children, predicate, out)
+    }
+    return out
+  }
+  const tiles = walk(panel, node => String(node.props.className || '').includes('flex-col gap-0.5 rounded-md bg-(--ui-bg-tertiary)'))
+  assert.equal(tiles.length, 6, 'six fact tiles render')
+  for (const tile of tiles) {
+    assert.equal(tile.props.children.length, 2, 'each tile keeps its label and value')
+    assert.ok(tile.props.children[0].props.children, 'tile label is not empty')
+    assert.ok(tile.props.children[1].props.children, 'tile value is not empty')
+  }
 
   const persisted = await sandbox.loadSessionModel({
     request: async () => { throw new Error('gateway down') },
@@ -181,6 +263,143 @@ const breakdown = {
 
   const tree = sandbox.ContextPanel()
   assert.ok(tree)
+  const section = sandbox.Section({ title: 'T', subtitle: 'S', className: 'bg-(--ui-surface-background)', children: null })
+  assert.ok(String(section.props.className).includes('bg-(--ui-surface-background)'))
+  const label = sandbox.Section({ title: 'T', subtitle: 'S', children: null })
+  assert.ok(String(label.props.className).includes('bg-(--ui-surface-background)'))
+  const approx = sandbox.presentCumulative({ cumulativeTotal: 482000, cumulativeInput: 479000, cumulativeOutput: 2300, cumulativeApprox: true })
+  assert.equal(approx.kind, 'approx')
+  assert.equal(approx.value, '≈ 482K')
+  assert.equal(approx.hint, undefined, 'hints are localized in the panel, not baked into the model')
+  assert.equal(approx.input, 479000)
+  assert.equal(approx.output, 2300)
+  const empty = sandbox.presentCumulative({ cumulativeTotal: null })
+  assert.equal(empty.kind, 'empty')
+  assert.equal(empty.value, '—')
+  assert.equal(empty.input, null)
+  const live = sandbox.presentCumulative({ cumulativeTotal: 254688, cumulativeInput: 125988, cumulativeOutput: 3132, cumulativeApprox: false })
+  assert.equal(live.kind, 'live')
+  assert.equal(live.value, '255K')
+  assert.equal(live.input, 125988)
+  // History is the expensive call: a tick-only refresh must not repeat it and
+  // must keep the counts already read.
+  let historyCalls = 0
+  const countingRequest = async method => {
+    if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 91000 }] }
+    if (method === 'session.active_list') return { sessions: [] }
+    if (method === 'session.history') { historyCalls += 1; return { messages: [{ role: 'user', timestamp: 1, text: 'hi' }] } }
+    throw new Error(method)
+  }
+  const firstLoad = await sandbox.loadSessionModel({ request: countingRequest, sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now() })
+  assert.equal(historyCalls, 1, 'first load reads history')
+  const tickLoad = await sandbox.loadSessionModel({ request: countingRequest, sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now(), includeHistory: false, previous: firstLoad })
+  assert.equal(historyCalls, 1, 'a tick refresh must not call session.history again')
+  assert.equal(tickLoad.counts.messages, 1, 'previous counts survive the tick refresh')
+  assert.equal(tickLoad.messages.length, 1, 'previous message list survives the tick refresh')
+
+  // The timing card is collapsible, and the gap tile explains itself on hover
+  // instead of relying on a label the reader has to decode.
+  const hintedTile = sandbox.tile('L', 'V', 'k', 'HINT')
+  assert.equal(hintedTile.props.children[1].props.title, 'HINT')
+
+  // Estimate vs measurement: the gap is reported rather than hidden.
+  const gap = await sandbox.loadSessionModel({
+    request: async method => {
+      if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 106000 }] }
+      if (method === 'session.active_list') return { sessions: [] }
+      if (method === 'session.history') return { messages: [{ role: 'user', timestamp: 1, text: 'hi' }] }
+      throw new Error(method)
+    },
+    sessionId: 'runtime-1', profile: 'tech', usage: { total: 1 }, now: Date.now()
+  })
+  assert.equal(gap.estimateDelta, 9000, 'estimate drift is surfaced as a number')
+  assert.equal(gap.messages.length, 1, 'the conversation is summarised for the detail view')
+  assert.equal(gap.messages[0].role, 'user')
+
+  // Detail bodies: conversation lists real rows, the system prompt is honest
+  // about being absent, and categories with no detail expose none at all.
+  const detailModel = { messages: [{ role: 'user', at: 1, text: '你好' }] }
+  const identT = key => key
+  assert.ok(sandbox.categoryDetail({ id: 'conversation' }, detailModel, null, identT).nodes.length === 1)
+  assert.equal(sandbox.categoryDetail({ id: 'system_prompt' }, detailModel, null, identT).nodes[0].props.children, 'promptUnavailable')
+  assert.equal(sandbox.categoryDetail({ id: 'system_prompt' }, detailModel, '# Soul', identT).nodes.length, 2)
+  assert.equal(sandbox.categoryDetail({ id: 'tool_definitions' }, detailModel, null, identT), null)
+
+  // Window length is a model property: when the breakdown reports 0 (no agent
+  // built yet) the usage snapshot may still know it, and that is legitimate.
+  const fallback = await sandbox.loadSessionModel({
+    request: async method => {
+      if (method === 'session.context_breakdown') return { context_used: 0, context_max: 0, categories: [{ id: 'conversation', label: '对话', tokens: 110000 }] }
+      if (method === 'session.active_list') return { sessions: [] }
+      if (method === 'session.history') return { messages: [] }
+      throw new Error(method)
+    },
+    sessionId: 'runtime-1',
+    profile: 'tech',
+    usage: { total: 1000, context_max: 1000000, context_used: 0 },
+    now: Date.now()
+  })
+  assert.equal(fallback.contextMax, 1000000, 'window size falls back to the usage snapshot')
+  assert.equal(fallback.contextUsed, null, 'the USED figure is still never borrowed from usage')
+  assert.equal(fallback.windowPercent, null)
+
+  // Category names: a missing Hermes label must resolve to a localised name,
+  // never to a raw id like "system_prompt".
+  const zh = ctx.bundles ? ctx.bundles.zh : null
+  const fakeT = key => (zh && zh[key]) || key
+  assert.equal(sandbox.categoryLabel({ id: 'system_prompt', label: 'system_prompt' }, fakeT), '系统提示词')
+  assert.equal(sandbox.categoryLabel({ id: 'tool_definitions' }, fakeT), '工具定义')
+  assert.equal(sandbox.categoryLabel({ id: 'system_prompt', label: '自定义名称' }, fakeT), '自定义名称')
+  assert.equal(sandbox.categoryLabel({ id: 'unknown_kind' }, fakeT), 'unknown_kind', 'unknown ids fall back to the id')
+  assert.equal(sandbox.categoryColor('system_prompt', 0), '#3b6fd4')
+  assert.equal(sandbox.categoryColor('conversation', 3), '#1f9d63')
+  assert.equal(sandbox.categoryColor('unknown_thing', 0), '#0e9aa7', 'unknown ids fall back to the palette')
+  assert.notEqual(sandbox.categoryColor('system_prompt', 0), sandbox.categoryColor('tool_definitions', 1), 'categories keep distinct colours')
+
+  // Two scales: the window bar must stay small when occupancy is small, while
+  // the classified bar normalises so small categories remain visible.
+  const bars = sandbox.compositionBars({
+    categories: [
+      { id: 'system_prompt', label: 'S', tokens: 6300 },
+      { id: 'conversation', label: 'C', tokens: 122000 }
+    ],
+    categoryTotal: 128300,
+    contextUsed: 121000,
+    contextMax: 1050000
+  })
+  const windowWidths = bars.windowBar.props.children.map(segment => Number.parseFloat(segment.props.style.width))
+  assert.ok(Math.abs(windowWidths[1] - 11.619) < 0.01, `window bar conversation ${windowWidths[1]} should be ~11.6%`)
+  assert.ok(windowWidths[0] + windowWidths[1] < 20, 'a small window occupancy must not fill the bar')
+
+  // No window size -> no filled bar at all: a fill would assert an occupancy
+  // nobody measured. This was the "capacity unknown but bar looks full" bug.
+  const noWindow = sandbox.compositionBars({
+    categories: [{ id: 'conversation', label: 'C', tokens: 110000 }],
+    categoryTotal: 110000,
+    contextUsed: null,
+    contextMax: null
+  })
+  assert.equal(noWindow.windowBar, null, 'no bar without a window denominator')
+  assert.equal(sandbox.compositionBars({ categories: [], categoryTotal: 0, contextUsed: null, contextMax: null }), null)
+
+  // Placement repair: run once so a stranded pane is re-adopted, then never
+  // again so a deliberate close survives the next reload.
+  const repairCalls = []
+  const repairStore = new Map()
+  const repairCtx = {
+    register: () => () => {},
+    onEvent: () => () => {},
+    onDispose: () => () => {},
+    storage: {
+      get: key => (repairStore.has(key) ? repairStore.get(key) : null),
+      set: (key, value) => { repairStore.set(key, value) }
+    }
+  }
+  sandbox.host.undismissPane = paneId => { repairCalls.push(paneId) }
+  sandbox.plugin.register(repairCtx)
+  assert.deepEqual(repairCalls, ['hermes-context-insight:panel'], 'first load must clear the remembered close')
+  sandbox.plugin.register(repairCtx)
+  assert.equal(repairCalls.length, 1, 'the repair must not run again on later reloads')
 
   console.log('PASS context-insight: model, category denominator, failure state')
 })().catch(error => { console.error(error); process.exitCode = 1 })
