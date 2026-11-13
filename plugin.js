@@ -33,8 +33,9 @@ const MESSAGES = {
     ofWindow: 'of window',
     free: 'free',
     notMeasured: 'Not measured before the model builds context.',
+    barWindowAria: 'Estimated share of the context window',
     barWindow: 'Top bar = occupancy of the window. Grey = unclassified and free.',
-    barNoWindow: 'Window size unavailable; bar shows classified content only.',
+    barNoWindow: 'Window size unavailable, so no occupancy bar is drawn — the list below is composition only.',
     factsTitle: 'Session facts',
     factsSubtitle: 'from Hermes usage',
     factModel: 'Model',
@@ -83,6 +84,14 @@ const MESSAGES = {
     cacheLabel: 'Cache hit',
     compressionsLabel: 'Compressions',
     tpsLabel: 'Throughput',
+    catSystemPrompt: 'System prompt',
+    catToolDefinitions: 'Tool definitions',
+    catSubagentDefinitions: 'Subagent definitions',
+    catMemory: 'Memory',
+    catConversation: 'Conversation',
+    catSkills: 'Skills index',
+    catRules: 'Rules',
+    catMcp: 'MCP tools',
     noSession: 'No active session',
     openChat: 'Open a chat to see its context.'
   },
@@ -98,8 +107,9 @@ const MESSAGES = {
     ofWindow: '占窗口',
     free: '剩余',
     notMeasured: '模型尚未构建上下文，暂无测量值。',
+    barWindowAria: '窗口占用比例的估算',
     barWindow: '上方彩条 = 窗口占用比例；灰色为未分类与空闲部分。',
-    barNoWindow: '窗口容量未知，彩条仅表示已分类内容的构成。',
+    barNoWindow: '窗口容量未知，因此不绘制占用彩条；下方仅为构成明细。',
     factsTitle: '会话统计',
     factsSubtitle: '数据来自 Hermes',
     factModel: '模型',
@@ -148,6 +158,14 @@ const MESSAGES = {
     cacheLabel: '缓存命中',
     compressionsLabel: '压缩次数',
     tpsLabel: '吞吐',
+    catSystemPrompt: '系统提示词',
+    catToolDefinitions: '工具定义',
+    catSubagentDefinitions: '子代理定义',
+    catMemory: '记忆',
+    catConversation: '对话',
+    catSkills: '技能索引',
+    catRules: '规则',
+    catMcp: 'MCP 工具',
     noSession: '没有活跃会话',
     openChat: '打开一个对话后即可查看上下文。'
   }
@@ -232,34 +250,31 @@ function categoryColor(id, index) {
  *  - composition bar: what fills the classified part, where small categories
  *    stay readable.
  */
-function compositionBars(model) {
+function compositionBars(model, t) {
   if (!model || model.categories.length === 0) return null
-  const windowScale = model.contextMax !== null && model.contextMax > 0
-    ? model.contextMax
-    : model.contextUsed !== null && model.contextUsed > 0 ? model.contextUsed : null
-  const classifiedScale = model.categoryTotal > 0 ? model.categoryTotal : null
-  if (windowScale === null && classifiedScale === null) return null
-
-  const row = (scale, label) => jsx('div', {
-    className: 'flex h-2.5 w-full overflow-hidden rounded-full bg-(--ui-stroke-secondary)',
-    role: 'img',
-    'aria-label': label,
-    children: model.categories.map((item, index) => jsx('div', {
-      className: 'h-full',
-      style: {
-        width: `${scale === null || item.tokens === null ? 0 : Math.min(100, (item.tokens / scale) * 100)}%`,
-        backgroundColor: categoryColor(item.id, index),
-        boxShadow: 'inset -1px 0 0 rgba(0,0,0,0.10)'
-      },
-      title: `${item.label} ${formatTokens(item.tokens)} of ${formatTokens(scale)}`
-    }, item.id))
-  })
-
+  const windowScale = model.contextMax !== null && model.contextMax > 0 ? model.contextMax : null
+  if (windowScale === null) {
+    // Without a window size a filled bar would claim an occupancy nobody
+    // measured, so the bar is withheld and the panel says why.
+    return { windowScale: null, windowBar: null }
+  }
+  const label = key => (typeof t === 'function' ? t(key) : key)
   return {
     windowScale,
-    classifiedScale,
-    windowBar: windowScale === null ? null : row(windowScale, 'Estimated share of the context window'),
-    classifiedBar: classifiedScale === null ? null : row(classifiedScale, 'Estimated share of classified content')
+    windowBar: jsx('div', {
+      className: 'flex h-2.5 w-full overflow-hidden rounded-full bg-(--ui-stroke-secondary)',
+      role: 'img',
+      'aria-label': label('barWindowAria'),
+      children: model.categories.map((item, index) => jsx('div', {
+        className: 'h-full',
+        style: {
+          width: `${item.tokens === null ? 0 : Math.min(100, (item.tokens / windowScale) * 100)}%`,
+          backgroundColor: categoryColor(item.id, index),
+          boxShadow: 'inset -1px 0 0 rgba(0,0,0,0.10)'
+        },
+        title: `${categoryLabel(item, label)} ${formatTokens(item.tokens)} / ${formatTokens(windowScale)}`
+      }, item.id))
+    })
   }
 }
 
@@ -268,7 +283,7 @@ function compositionBars(model) {
  * label/value pair cannot be dropped by passing children as a third argument —
  * `jsxs(type, props, children)` silently treats that third argument as a key.
  */
-function legendRow(item, index) {
+function legendRow(item, index, t) {
   return {
     className: 'flex min-w-0 items-baseline gap-1.5 text-[0.75rem]',
     children: kids([
@@ -279,7 +294,7 @@ function legendRow(item, index) {
       }),
       jsx('span', {
         className: 'min-w-0 break-words text-(--ui-text-secondary)',
-        children: item.label
+        children: categoryLabel(item, typeof t === 'function' ? t : null)
       }),
       jsx('span', {
         className: 'ml-auto shrink-0 text-right tabular-nums text-(--ui-text-tertiary)',
@@ -420,6 +435,30 @@ function kids(nodes) {
     if (node.key !== undefined && node.key !== null) return node
     return { ...node, key: `k${index}` }
   })
+}
+
+/** Known breakdown ids to locale keys. Unknown ids fall back to the raw id. */
+const CATEGORY_KEYS = {
+  system_prompt: 'catSystemPrompt',
+  tool_definitions: 'catToolDefinitions',
+  subagent_definitions: 'catSubagentDefinitions',
+  memory: 'catMemory',
+  conversation: 'catConversation',
+  skills: 'catSkills',
+  rules: 'catRules',
+  mcp: 'catMcp'
+}
+
+/** A category's display name: Hermes' own label when present, else the
+ *  localised name for a known id, else the id itself. */
+function categoryLabel(item, t) {
+  if (typeof item?.label === 'string' && item.label && item.label !== item.id) return item.label
+  const key = CATEGORY_KEYS[item?.id]
+  if (key) {
+    const localised = t(key)
+    if (localised && localised !== key) return localised
+  }
+  return item?.id ?? ''
 }
 
 function Section({ title, subtitle, children, className }) {
@@ -591,7 +630,14 @@ function buildModel(input) {
   const categoryTotal = sumCategories(categories)
   // An agentless cold start can return estimated categories with context_used=0
   // and context_max=0. Those zeros mean "not measured", not "empty window".
-  const contextMax = rawMax !== null && rawMax > 0 ? rawMax : null
+  // The window length is a property of the model, not of one measurement, so
+  // the usage snapshot is a legitimate fallback when the breakdown returns 0
+  // (the agent has not built its compressor yet). The USED figure is never
+  // taken from usage here: the two used values are different measurements.
+  const usageMax = finiteNumber(usage?.context_max)
+  const contextMax = rawMax !== null && rawMax > 0
+    ? rawMax
+    : (usageMax !== null && usageMax > 0 ? usageMax : null)
   const contextUsed = rawUsed === 0 && categoryTotal > 0 ? null : rawUsed
 
   return {
@@ -698,7 +744,7 @@ function ContextPanel() {
     cumulativeOutput,
     cumulativeApprox
   })
-  const bars = compositionBars(shown)
+  const bars = compositionBars(shown, t)
   const facts = presentFacts(shown !== null ? shown : usageModel)
   const updatedSeconds = snapshot.at > 0 ? Math.max(0, Math.round((now - snapshot.at) / 1000)) : null
   const cumulativeHint = cumulative.kind === 'empty'
@@ -782,8 +828,8 @@ function ContextPanel() {
             shown !== null && shown.categories.length > 0 && bars !== null && bars.windowBar
               ? jsx('div', { key: 'wbar', children: bars.windowBar })
               : null,
-            shown !== null && shown.categories.length > 0 && bars !== null && bars.classifiedBar
-              ? jsx('div', { key: 'cbar', children: bars.classifiedBar })
+            shown !== null && shown.categories.length > 0 && (bars === null || bars.windowBar === null)
+              ? jsx('div', { key: 'track', className: 'h-2.5 w-full rounded-full bg-(--ui-stroke-secondary)' })
               : null,
             shown !== null && shown.categories.length > 0
               ? jsx('div', {
@@ -805,7 +851,7 @@ function ContextPanel() {
               ? jsx('div', {
                   key: 'legend',
                   className: 'grid grid-cols-2 gap-x-3 gap-y-1.5',
-                  children: shown.categories.map((item, index) => jsx('div', legendRow(item, index), item.id))
+                  children: shown.categories.map((item, index) => jsx('div', legendRow(item, index, t), item.id))
                 })
               : null,
             shown !== null && shown.categories.length > 0
@@ -836,7 +882,7 @@ function ContextPanel() {
                   className: 'flex items-baseline gap-2 text-[0.75rem]',
                   children: [
                     jsx('span', { key: 'dot', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: categoryColor(item.id, index) } }),
-                    jsx('span', { key: 'name', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: item.label }),
+                    jsx('span', { key: 'name', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: categoryLabel(item, t) }),
                     jsx('span', {
                       key: 'count',
                       className: 'ml-auto shrink-0 tabular-nums ' + (typeof item.count === 'number' ? 'text-(--ui-text-tertiary)' : 'italic text-(--ui-text-quaternary)'),

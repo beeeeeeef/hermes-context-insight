@@ -280,6 +280,32 @@ const breakdown = {
   assert.equal(live.kind, 'live')
   assert.equal(live.value, '255K')
   assert.equal(live.input, 125988)
+  // Window length is a model property: when the breakdown reports 0 (no agent
+  // built yet) the usage snapshot may still know it, and that is legitimate.
+  const fallback = await sandbox.loadSessionModel({
+    request: async method => {
+      if (method === 'session.context_breakdown') return { context_used: 0, context_max: 0, categories: [{ id: 'conversation', label: '对话', tokens: 110000 }] }
+      if (method === 'session.active_list') return { sessions: [] }
+      if (method === 'session.history') return { messages: [] }
+      throw new Error(method)
+    },
+    sessionId: 'runtime-1',
+    profile: 'tech',
+    usage: { total: 1000, context_max: 1000000, context_used: 0 },
+    now: Date.now()
+  })
+  assert.equal(fallback.contextMax, 1000000, 'window size falls back to the usage snapshot')
+  assert.equal(fallback.contextUsed, null, 'the USED figure is still never borrowed from usage')
+  assert.equal(fallback.windowPercent, null)
+
+  // Category names: a missing Hermes label must resolve to a localised name,
+  // never to a raw id like "system_prompt".
+  const zh = ctx.bundles ? ctx.bundles.zh : null
+  const fakeT = key => (zh && zh[key]) || key
+  assert.equal(sandbox.categoryLabel({ id: 'system_prompt', label: 'system_prompt' }, fakeT), '系统提示词')
+  assert.equal(sandbox.categoryLabel({ id: 'tool_definitions' }, fakeT), '工具定义')
+  assert.equal(sandbox.categoryLabel({ id: 'system_prompt', label: '自定义名称' }, fakeT), '自定义名称')
+  assert.equal(sandbox.categoryLabel({ id: 'unknown_kind' }, fakeT), 'unknown_kind', 'unknown ids fall back to the id')
   assert.equal(sandbox.categoryColor('system_prompt', 0), '#3b6fd4')
   assert.equal(sandbox.categoryColor('conversation', 3), '#1f9d63')
   assert.equal(sandbox.categoryColor('unknown_thing', 0), '#0e9aa7', 'unknown ids fall back to the palette')
@@ -299,9 +325,16 @@ const breakdown = {
   const windowWidths = bars.windowBar.props.children.map(segment => Number.parseFloat(segment.props.style.width))
   assert.ok(Math.abs(windowWidths[1] - 11.619) < 0.01, `window bar conversation ${windowWidths[1]} should be ~11.6%`)
   assert.ok(windowWidths[0] + windowWidths[1] < 20, 'a small window occupancy must not fill the bar')
-  const classifiedWidths = bars.classifiedBar.props.children.map(segment => Number.parseFloat(segment.props.style.width))
-  assert.ok(classifiedWidths[0] > 4, `classified bar must keep system prompt visible, got ${classifiedWidths[0]}%`)
-  assert.ok(Math.abs(classifiedWidths[0] + classifiedWidths[1] - 100) < 0.01, 'classified bar fills its own scale')
+
+  // No window size -> no filled bar at all: a fill would assert an occupancy
+  // nobody measured. This was the "capacity unknown but bar looks full" bug.
+  const noWindow = sandbox.compositionBars({
+    categories: [{ id: 'conversation', label: 'C', tokens: 110000 }],
+    categoryTotal: 110000,
+    contextUsed: null,
+    contextMax: null
+  })
+  assert.equal(noWindow.windowBar, null, 'no bar without a window denominator')
   assert.equal(sandbox.compositionBars({ categories: [], categoryTotal: 0, contextUsed: null, contextMax: null }), null)
 
   // Placement repair: run once so a stranded pane is re-adopted, then never
