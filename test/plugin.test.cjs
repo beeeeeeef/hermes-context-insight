@@ -252,35 +252,47 @@ const breakdown = {
   assert.ok(String(section.props.className).includes('bg-(--ui-surface-background)'))
   const label = sandbox.Section({ title: 'T', subtitle: 'S', children: null })
   assert.ok(String(label.props.className).includes('bg-(--ui-surface-background)'))
-  const approx = sandbox.presentCumulative({ cumulativeTotal: 482000, cumulativeInput: 479000, cumulativeOutput: 2300, cumulativeApprox: true })
-  assert.equal(approx.kind, 'approx')
-  // The centre figure is what the arcs can account for (input + output); the
-  // rest of Hermes' total is carried separately so the card cannot contradict
-  // itself, which was the reported bug.
-  assert.equal(approx.value, '\u2248 481K', 'centre is input + output, not the Hermes total')
-  assert.equal(approx.io, 481300)
-  assert.equal(approx.other, 700, 'remainder of total tokens is explicit')
-  assert.equal(approx.full, '\u2248 482K', 'the Hermes total is still reported')
-  assert.equal(approx.hint, undefined, 'hints are localized in the panel, not baked into the model')
-  assert.equal(approx.input, 479000)
-  assert.equal(approx.output, 2300)
+  // With session.stats the card runs on one source: uncached input + cache
+  // replay + cache write form the input arc, output is the second arc, and the
+  // centre is their sum, so nothing on the card can contradict anything else.
+  const split = sandbox.presentCumulative({
+    cumulativeApprox: false,
+    cumulativeParts: { uncached: 41131275, cacheRead: 455919883, cacheWrite: 0, output: 507217 }
+  })
+  assert.equal(split.kind, 'live')
+  assert.equal(split.input, 497051158, 'input arc carries cache replay')
+  assert.equal(split.output, 507217)
+  assert.equal(split.total, 497558375, 'centre is the sum of the arcs')
+  assert.equal(split.value, '497.56M')
+  assert.equal(split.cacheHitPct, 91.7, 'hit rate = cache read over all prompt input')
+  assert.equal(split.uncached, 41131275)
+
+  // Cache write, when a provider reports it, belongs to the input arc and to the
+  // hit-rate base rather than appearing as a third slice.
+  const withWrite = sandbox.presentCumulative({
+    cumulativeParts: { uncached: 100, cacheRead: 300, cacheWrite: 100, output: 400 }
+  })
+  assert.equal(withWrite.input, 500)
+  assert.equal(withWrite.total, 900)
+  assert.equal(withWrite.cacheHitPct, 60)
+
+  // Before the first turn there are no stats, and the card falls back to the
+  // usage counters without inventing cache figures.
+  const usageOnly = sandbox.presentCumulative({ cumulativeTotal: 254688, cumulativeInput: 125988, cumulativeOutput: 3132, cumulativeApprox: false })
+  assert.equal(usageOnly.kind, 'live')
+  assert.equal(usageOnly.value, '129K', 'fallback centre is input + output')
+  assert.equal(usageOnly.cacheRead, null, 'no cache figure is fabricated')
+  assert.equal(usageOnly.cacheHitPct, null)
+
   const empty = sandbox.presentCumulative({ cumulativeTotal: null })
   assert.equal(empty.kind, 'empty')
-  assert.equal(empty.value, '—')
+  assert.equal(empty.value, '\u2014')
   assert.equal(empty.input, null)
-  const live = sandbox.presentCumulative({ cumulativeTotal: 254688, cumulativeInput: 125988, cumulativeOutput: 3132, cumulativeApprox: false })
-  assert.equal(live.kind, 'live')
-  assert.equal(live.value, '129K', 'centre is input + output')
-  assert.equal(live.io, 129120)
-  assert.equal(live.other, 125568, 'the rest of the total is not silently dropped')
-  assert.equal(live.full, '255K')
-  assert.equal(live.input, 125988)
-  // The donut arcs must cover the whole centre figure, otherwise the number in
-  // the middle cannot be reconciled with the colours around it.
-  const arcSegments = sandbox.inputOutputSegments({ input: 100, output: 20, other: 30 })
-  assert.equal(arcSegments.length, 3, 'remainder gets its own arc')
-  assert.equal(arcSegments.reduce((sum, seg) => sum + seg.value, 0), 150, 'arcs add up to the centre')
-  assert.equal(sandbox.inputOutputSegments({ input: 100, output: 20, other: 0 }).length, 2, 'no empty arc')
+
+  // The ring is exactly two arcs, and together they are the centre figure.
+  const arcs = sandbox.inputOutputSegments({ input: 497051158, output: 507217 })
+  assert.equal(arcs.length, 2, 'two arcs only')
+  assert.equal(arcs.reduce((sum, seg) => sum + seg.value, 0), 497558375, 'arcs add up to the centre')
 
   // History is the expensive call: a tick-only refresh must not repeat it and
   // must keep the counts already read.

@@ -52,11 +52,9 @@ const MESSAGES = {
     notReadYet: 'Not read yet',
     session: id => `Session ${id}`,
     cumulativeTitle: 'Session total',
-    totalTokens: 'Input + output',
-    otherTokens: 'Cached prompt replay',
-    otherHint: 'The difference between Hermes total tokens and input + output (cache reads and writes).',
-    totalLine: value => `Hermes total ${value}`,
-    inputLabel: 'Input',
+    totalTokens: 'Total tokens',
+    uncachedInput: 'Uncached input',
+    cacheReadLabel: 'Cache read',
     outputLabel: 'Output',
     itemsTitle: 'Items by category',
     items: n => `${n} items`,
@@ -124,11 +122,9 @@ const MESSAGES = {
     notReadYet: '尚未读取',
     session: id => `会话 ${id}`,
     cumulativeTitle: '会话累计',
-    totalTokens: '输入 + 输出',
-    otherTokens: '缓存命中的提示词',
-    otherHint: 'Hermes 的 total 比输入 + 输出 多出的部分（缓存读取与写入）。',
-    totalLine: value => `Hermes 总计 ${value}`,
-    inputLabel: '输入',
+    totalTokens: '累计 token',
+    uncachedInput: '未缓存输入',
+    cacheReadLabel: '缓存读取',
     outputLabel: '输出',
     itemsTitle: '逐项条数',
     items: n => `${n} 项`,
@@ -224,30 +220,48 @@ function elapsedAt(data, snapshotAt, now) {
 
 /** One reading of the cumulative total, so the label, marker and hint cannot drift apart. */
 function presentCumulative(model) {
+  const approximate = model?.cumulativeApprox === true
+  const mark = approximate ? '\u2248 ' : ''
+  const parts = model?.cumulativeParts
+  if (parts) {
+    // One source for every figure on the card: the arcs are uncached input plus
+    // cache replay (and cache write, when the provider reports it) against
+    // output, and the centre is their sum.
+    const input = parts.uncached + parts.cacheRead + parts.cacheWrite
+    const total = input + parts.output
+    const hitBase = parts.uncached + parts.cacheRead + parts.cacheWrite
+    return {
+      kind: approximate ? 'approx' : 'live',
+      input,
+      output: parts.output,
+      uncached: parts.uncached,
+      cacheRead: parts.cacheRead,
+      cacheWrite: parts.cacheWrite,
+      cacheHitPct: hitBase > 0 ? Math.round((parts.cacheRead / hitBase) * 1000) / 10 : null,
+      value: `${mark}${formatTokens(total)}`,
+      total
+    }
+  }
+  // Fallback before the first turn has counters: usage.input / usage.output only.
   const total = finiteNumber(model?.cumulativeTotal)
-  if (total === null) return { kind: 'empty', value: '—', input: null, output: null, other: null, io: null, full: null }
+  if (total === null) return { kind: 'empty', value: '\u2014', input: null, output: null, uncached: null, cacheRead: null, cacheWrite: null, cacheHitPct: null, total: null }
   const input = finiteNumber(model?.cumulativeInput)
   const output = finiteNumber(model?.cumulativeOutput)
-  const approximate = model?.cumulativeApprox === true
-  const value = approximate ? `≈ ${formatTokens(total)}` : formatTokens(total)
-  // Hermes accumulates `usage.total` as provider total_tokens while `usage.input`
-  // is canonical input_tokens only, so total >= input + output: the remainder is
-  // cached prompt replay. The centre figure is the part the arcs can account for,
-  // and the remainder is reported next to them instead of hiding in the middle.
-  const io = input !== null && output !== null ? input + output : null
-  if (io === null) return { kind: approximate ? 'approx' : 'live', value, input, output, other: null, io: null, full: value }
+  if (input === null || output === null) {
+    return { kind: approximate ? 'approx' : 'live', input, output, uncached: null, cacheRead: null, cacheWrite: null, cacheHitPct: null, value: `${mark}${formatTokens(total)}`, total }
+  }
   return {
     kind: approximate ? 'approx' : 'live',
-    value: approximate ? `≈ ${formatTokens(io)}` : formatTokens(io),
     input,
     output,
-    other: Math.max(0, total - io),
-    io,
-    full: value
+    uncached: input,
+    cacheRead: null,
+    cacheWrite: null,
+    cacheHitPct: null,
+    value: `${mark}${formatTokens(input + output)}`,
+    total: input + output
   }
 }
-
-const OTHER_TOKENS_COLOR = '#8a8f98'
 
 const CATEGORY_COLORS = {
   system_prompt: '#3b6fd4',
@@ -424,17 +438,18 @@ function Donut({ segments, centerValue, centerLabel }) {
 }
 
 /** Swatch + label + formatted token value, used beside the donut. */
-function legendLine(color, label, value, key, hint) {
+/** Label on the left, a plain figure on the right (raw token counts). */
+function statRow(label, value, key) {
   return jsxs('div', {
     key,
     className: 'flex items-baseline gap-1.5',
     children: kids([
-      jsx('span', { key: 'sw', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: color } }),
-      jsx('span', { key: 'lb', className: 'min-w-0 break-words text-(--ui-text-secondary)', title: hint, children: label }),
-      jsx('span', { key: 'vl', className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', title: hint, children: formatTokens(value) })
+      jsx('span', { key: 'lb', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: label }),
+      jsx('span', { key: 'vl', className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', children: value })
     ])
   })
 }
+
 
 /** A labelled statistic cell. */
 function tile(label, value, key, hint) {
@@ -463,14 +478,12 @@ function formatDuration(seconds) {
 /** Input/output arcs for the cumulative donut. */
 function inputOutputSegments(cumulative) {
   if (!cumulative || cumulative.input === null || cumulative.output === null) return []
-  const segments = [
+  // Two arcs only: input already carries cache replay, so the pair adds up to
+  // the centre figure without needing a third slice.
+  return [
     { id: 'in', color: 'var(--ui-accent)', value: cumulative.input },
     { id: 'out', color: '#d6457f', value: cumulative.output }
   ]
-  // The arcs must account for the whole centre figure; the remainder is one of
-  // the three parts, not an unexplained gap.
-  if (cumulative.other > 0) segments.push({ id: 'other', color: OTHER_TOKENS_COLOR, value: cumulative.other })
-  return segments
 }
 
 /** Give array children stable positional keys, so no call site can omit one. */
@@ -640,18 +653,40 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     counts: null,
     gaps: [],
     estimateDelta: null,
-    messages: []
+    messages: [],
+    cumulativeParts: null
   }
   if (!sessionId) return result
 
   const params = { session_id: sessionId, profile }
-  const [breakdownResult, activeResult, historyResult] = await Promise.all([
+  const [breakdownResult, activeResult, historyResult, statsResult] = await Promise.all([
     request('session.context_breakdown', params).then(value => ({ ok: true, value }), () => ({ ok: false })),
     request('session.active_list', { profile }).then(value => ({ ok: true, value }), () => ({ ok: false })),
     includeHistory
       ? request('session.history', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
-      : Promise.resolve({ ok: false, skipped: true })
+      : Promise.resolve({ ok: false, skipped: true }),
+    // session.stats is the only read that exposes the cache counters as absolute
+    // numbers; focusedUsage reduces them to a percentage.
+    request('session.stats', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
   ])
+
+  // Cumulative split. Every part comes from one source so the legend cannot
+  // disagree with the arcs: uncached input, cache replay, optional cache write,
+  // and output, with the centre being their sum.
+  if (statsResult.ok && statsResult.value && typeof statsResult.value === 'object') {
+    const uncached = finiteNumber(statsResult.value.input_tokens)
+    const cacheRead = finiteNumber(statsResult.value.cache_read_tokens)
+    const cacheWrite = finiteNumber(statsResult.value.cache_write_tokens)
+    const out = finiteNumber(statsResult.value.output_tokens)
+    if (uncached !== null && out !== null) {
+      result.cumulativeParts = {
+        uncached,
+        cacheRead: cacheRead ?? 0,
+        cacheWrite: cacheWrite ?? 0,
+        output: out
+      }
+    }
+  }
 
   if (breakdownResult.ok) {
     result.breakdownAvailable = true
@@ -865,7 +900,8 @@ function ContextPanel() {
     cumulativeTotal,
     cumulativeInput,
     cumulativeOutput,
-    cumulativeApprox
+    cumulativeApprox,
+    cumulativeParts: shown !== null ? shown.cumulativeParts : null
   })
   const bars = compositionBars(shown, t)
   const updatedSeconds = snapshot.at > 0 ? Math.max(0, Math.round((now - snapshot.at) / 1000)) : null
@@ -903,14 +939,16 @@ function ContextPanel() {
               key: 'legend',
               className: 'flex min-w-0 flex-1 flex-col gap-1 text-[0.75rem]',
               children: [
-                legendLine('var(--ui-accent)', t('inputLabel'), cumulative.input, 'in'),
-                legendLine('#d6457f', t('outputLabel'), cumulative.output, 'out'),
-                cumulative.other > 0
-                  ? legendLine(OTHER_TOKENS_COLOR, t('otherTokens'), cumulative.other, 'other', t('otherHint'))
+                cumulative.cacheHitPct !== null
+                  ? statRow(t('cacheLabel'), `${cumulative.cacheHitPct}%`, 'hit')
                   : null,
-                cumulative.other > 0
-                  ? jsx('div', { key: 'total-line', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: t('totalLine', cumulative.full) })
+                cumulative.uncached !== null
+                  ? statRow(t('uncachedInput'), `${formatCount(cumulative.uncached)} tok`, 'uncached')
                   : null,
+                cumulative.cacheRead !== null
+                  ? statRow(t('cacheReadLabel'), `${formatCount(cumulative.cacheRead)} tok`, 'read')
+                  : null,
+                statRow(t('outputLabel'), `${formatCount(cumulative.output)} tok`, 'out'),
                 cumulativeHint ? jsx('div', { key: 'hint', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: cumulativeHint }) : null
               ]
             })

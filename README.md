@@ -9,14 +9,12 @@ bundles ship in `plugin.js` and resolve against `display.language`.
 
 Four cards, in the order the numbers matter:
 
-1. **Session total** — the donut centre is **input + output**, the amount its own
-   arcs account for. Hermes accumulates `usage.total` separately (provider
-   `total_tokens`), which is larger than `input + output` because cached prompt
-   replay is billed there; that remainder is drawn as a third, grey arc and
-   printed as its own legend line, with the Hermes total quoted underneath. No
-   cached-token absolute exists in `UsageStats`, so the remainder is reported as
-   one figure and never split further. There is no per-category cumulative split
-   to show.
+1. **Session total** — a two-arc donut: **input** (uncached input + cache replay
+   + cache write) against **output**, with the centre showing the total the two
+   arcs add up to. Beside it, four figures from `session.stats`: cache hit rate,
+   uncached input, cache read and output. Every number on this card comes from
+   that one RPC, so the arcs and the legend cannot disagree. Cache write is folded
+   into the input arc rather than given its own slice.
 2. **Current window** — measured occupancy over a model-property window: the
    percentage ring, the used/capacity figure, the free remainder, an occupancy bar
    and the per-category composition.
@@ -47,6 +45,7 @@ The plugin reads Hermes Desktop's public SDK state and three read-only gateway c
 | `host.state.focusedUsage` | live cumulative token counters |
 | `session.context_breakdown` | current occupancy and estimated categories |
 | `session.active_list` | the session's natural start time |
+| `session.stats` | cumulative input/output/cache counters |
 | `session.history` | conversation counts, message list, recorded gaps |
 | `session.info` (event) | the system prompt, only when Hermes pushes one |
 | `host.listPersistedSessions` | cold-start fallback for persisted `input_tokens` + `output_tokens` |
@@ -56,9 +55,10 @@ It does **not** write files, make external network requests, or access a databas
 ## Known limits
 
 - Category figures are Hermes estimates; they are not exact tokenizer counts.
-- `usage.total` and `usage.input + usage.output` do not agree in Hermes: `total` is
-  the provider's `total_tokens` while `input` is `input_tokens` without cache reads
-  and writes. The card names both rather than implying they are the same quantity.
+- `session.stats` is the only read that exposes the cache counters as absolute
+  numbers (`cache_read_tokens`, `cache_write_tokens`); `focusedUsage` reduces them
+  to a percentage. Without stats (before the first turn builds an agent) the card
+  falls back to `usage.input` / `usage.output` and shows no cache row.
 - `context_breakdown.context_used` and `focusedUsage.context_used` are different measurements. This plugin deliberately uses the former for the window figure and never combines the two.
 - A session absent from `active_list`, or without `started_at`, shows elapsed time as unavailable rather than inventing a start.
 - Before the agent has built its context, the breakdown may return no categories; the panel says so instead of drawing zeros.
