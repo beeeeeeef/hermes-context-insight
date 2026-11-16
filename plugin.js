@@ -52,7 +52,10 @@ const MESSAGES = {
     notReadYet: 'Not read yet',
     session: id => `Session ${id}`,
     cumulativeTitle: 'Session total',
-    totalTokens: 'Total tokens',
+    totalTokens: 'Input + output',
+    otherTokens: 'Cached prompt replay',
+    otherHint: 'The difference between Hermes total tokens and input + output (cache reads and writes).',
+    totalLine: value => `Hermes total ${value}`,
     inputLabel: 'Input',
     outputLabel: 'Output',
     itemsTitle: 'Items by category',
@@ -121,7 +124,10 @@ const MESSAGES = {
     notReadYet: '尚未读取',
     session: id => `会话 ${id}`,
     cumulativeTitle: '会话累计',
-    totalTokens: '累计 token',
+    totalTokens: '输入 + 输出',
+    otherTokens: '缓存命中的提示词',
+    otherHint: 'Hermes 的 total 比输入 + 输出 多出的部分（缓存读取与写入）。',
+    totalLine: value => `Hermes 总计 ${value}`,
     inputLabel: '输入',
     outputLabel: '输出',
     itemsTitle: '逐项条数',
@@ -219,14 +225,29 @@ function elapsedAt(data, snapshotAt, now) {
 /** One reading of the cumulative total, so the label, marker and hint cannot drift apart. */
 function presentCumulative(model) {
   const total = finiteNumber(model?.cumulativeTotal)
-  if (total === null) return { kind: 'empty', value: '—', input: null, output: null }
+  if (total === null) return { kind: 'empty', value: '—', input: null, output: null, other: null, io: null, full: null }
   const input = finiteNumber(model?.cumulativeInput)
   const output = finiteNumber(model?.cumulativeOutput)
-  if (model?.cumulativeApprox === true) {
-    return { kind: 'approx', value: `≈ ${formatTokens(total)}`, input, output }
+  const approximate = model?.cumulativeApprox === true
+  const value = approximate ? `≈ ${formatTokens(total)}` : formatTokens(total)
+  // Hermes accumulates `usage.total` as provider total_tokens while `usage.input`
+  // is canonical input_tokens only, so total >= input + output: the remainder is
+  // cached prompt replay. The centre figure is the part the arcs can account for,
+  // and the remainder is reported next to them instead of hiding in the middle.
+  const io = input !== null && output !== null ? input + output : null
+  if (io === null) return { kind: approximate ? 'approx' : 'live', value, input, output, other: null, io: null, full: value }
+  return {
+    kind: approximate ? 'approx' : 'live',
+    value: approximate ? `≈ ${formatTokens(io)}` : formatTokens(io),
+    input,
+    output,
+    other: Math.max(0, total - io),
+    io,
+    full: value
   }
-  return { kind: 'live', value: formatTokens(total), input, output }
 }
+
+const OTHER_TOKENS_COLOR = '#8a8f98'
 
 const CATEGORY_COLORS = {
   system_prompt: '#3b6fd4',
@@ -403,14 +424,14 @@ function Donut({ segments, centerValue, centerLabel }) {
 }
 
 /** Swatch + label + formatted token value, used beside the donut. */
-function legendLine(color, label, value, key) {
+function legendLine(color, label, value, key, hint) {
   return jsxs('div', {
     key,
     className: 'flex items-baseline gap-1.5',
     children: kids([
       jsx('span', { key: 'sw', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: color } }),
-      jsx('span', { key: 'lb', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: label }),
-      jsx('span', { key: 'vl', className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', children: formatTokens(value) })
+      jsx('span', { key: 'lb', className: 'min-w-0 break-words text-(--ui-text-secondary)', title: hint, children: label }),
+      jsx('span', { key: 'vl', className: 'ml-auto shrink-0 tabular-nums text-(--ui-text-tertiary)', title: hint, children: formatTokens(value) })
     ])
   })
 }
@@ -442,10 +463,14 @@ function formatDuration(seconds) {
 /** Input/output arcs for the cumulative donut. */
 function inputOutputSegments(cumulative) {
   if (!cumulative || cumulative.input === null || cumulative.output === null) return []
-  return [
+  const segments = [
     { id: 'in', color: 'var(--ui-accent)', value: cumulative.input },
     { id: 'out', color: '#d6457f', value: cumulative.output }
   ]
+  // The arcs must account for the whole centre figure; the remainder is one of
+  // the three parts, not an unexplained gap.
+  if (cumulative.other > 0) segments.push({ id: 'other', color: OTHER_TOKENS_COLOR, value: cumulative.other })
+  return segments
 }
 
 /** Give array children stable positional keys, so no call site can omit one. */
@@ -771,19 +796,6 @@ function buildModel(input) {
   }
 }
 
-/** Session counters as label/value rows; absent values are omitted, never zeroed. */
-function presentFacts(model) {
-  if (!model) return []
-  const facts = []
-  if (model.model) facts.push({ labelKey: 'factModel', value: model.model })
-  if (model.calls !== null) facts.push({ labelKey: 'factCalls', value: formatCount(model.calls) })
-  if (model.compressions !== null) facts.push({ labelKey: 'factCompressions', value: formatCount(model.compressions) })
-  if (model.cacheHitPct !== null) facts.push({ labelKey: 'factCache', value: `${Math.round(model.cacheHitPct * 10) / 10}%` })
-  if (model.avgTps !== null) facts.push({ labelKey: 'factTps', value: `${Math.round(model.avgTps * 10) / 10} tok/s` })
-  if (model.avgLatencyS !== null) facts.push({ labelKey: 'factLatency', value: `${Math.round(model.avgLatencyS * 10) / 10}s` })
-  return facts
-}
-
 function ContextPanel() {
   const t = usePluginI18n(ID)
   const usage = useValue(host.state.focusedUsage)
@@ -856,7 +868,6 @@ function ContextPanel() {
     cumulativeApprox
   })
   const bars = compositionBars(shown, t)
-  const facts = presentFacts(shown !== null ? shown : usageModel)
   const updatedSeconds = snapshot.at > 0 ? Math.max(0, Math.round((now - snapshot.at) / 1000)) : null
   const cumulativeHint = cumulative.kind === 'empty'
     ? t('awaitingUsage')
@@ -894,6 +905,12 @@ function ContextPanel() {
               children: [
                 legendLine('var(--ui-accent)', t('inputLabel'), cumulative.input, 'in'),
                 legendLine('#d6457f', t('outputLabel'), cumulative.output, 'out'),
+                cumulative.other > 0
+                  ? legendLine(OTHER_TOKENS_COLOR, t('otherTokens'), cumulative.other, 'other', t('otherHint'))
+                  : null,
+                cumulative.other > 0
+                  ? jsx('div', { key: 'total-line', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: t('totalLine', cumulative.full) })
+                  : null,
                 cumulativeHint ? jsx('div', { key: 'hint', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: cumulativeHint }) : null
               ]
             })

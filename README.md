@@ -9,8 +9,14 @@ bundles ship in `plugin.js` and resolve against `display.language`.
 
 Four cards, in the order the numbers matter:
 
-1. **Session total** — cumulative input/output tokens for the whole session. Hermes
-   exposes no per-category cumulative split, so the donut is input vs output only.
+1. **Session total** — the donut centre is **input + output**, the amount its own
+   arcs account for. Hermes accumulates `usage.total` separately (provider
+   `total_tokens`), which is larger than `input + output` because cached prompt
+   replay is billed there; that remainder is drawn as a third, grey arc and
+   printed as its own legend line, with the Hermes total quoted underneath. No
+   cached-token absolute exists in `UsageStats`, so the remainder is reported as
+   one figure and never split further. There is no per-category cumulative split
+   to show.
 2. **Current window** — measured occupancy over a model-property window: the
    percentage ring, the used/capacity figure, the free remainder, an occupancy bar
    and the per-category composition.
@@ -50,6 +56,9 @@ It does **not** write files, make external network requests, or access a databas
 ## Known limits
 
 - Category figures are Hermes estimates; they are not exact tokenizer counts.
+- `usage.total` and `usage.input + usage.output` do not agree in Hermes: `total` is
+  the provider's `total_tokens` while `input` is `input_tokens` without cache reads
+  and writes. The card names both rather than implying they are the same quantity.
 - `context_breakdown.context_used` and `focusedUsage.context_used` are different measurements. This plugin deliberately uses the former for the window figure and never combines the two.
 - A session absent from `active_list`, or without `started_at`, shows elapsed time as unavailable rather than inventing a start.
 - Before the agent has built its context, the breakdown may return no categories; the panel says so instead of drawing zeros.

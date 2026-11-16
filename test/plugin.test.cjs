@@ -161,7 +161,6 @@ const breakdown = {
   assert.equal(cold.windowPercent, null)
   assert.equal(cold.categoryTotal, 236000, 'estimated categories remain visible while occupancy is unavailable')
   assert.equal(cold.freeTokens, null, 'no free-token figure without a measured window')
-  assert.equal(sandbox.presentFacts(cold).length, 0, 'no facts invented when Hermes reports none')
 
   const rich = sandbox.buildModel({
     usage: {
@@ -173,17 +172,6 @@ const breakdown = {
     now: 100000
   })
   assert.equal(rich.freeTokens, 929000, 'free = capacity - used')
-  const facts = sandbox.presentFacts(rich)
-  const factOf = key => facts.find(fact => fact.labelKey === key)
-  assert.equal(factOf('factModel').value, 'deepseek-v4.1-flash')
-  assert.equal(factOf('factCalls').value, '708')
-  assert.equal(factOf('factCompressions').value, '1')
-  assert.equal(factOf('factCache').value, '90.6%', 'percent rounded to one decimal')
-  assert.equal(factOf('factTps').value, '61.2 tok/s')
-  assert.equal(factOf('factLatency').value, '1.8s')
-  assert.equal(facts.length, 6)
-  assert.equal(facts.filter(fact => fact.value === '—').length, 0, 'no placeholder rows')
-
   // Regression: legend rows must keep dot + label + value. A row built as
   // jsxs(type, props, children) loses its children to the key argument.
   const row = sandbox.legendRow({ id: 'conversation', label: '对话', tokens: 122000, share: 86.5 }, 4)
@@ -194,9 +182,6 @@ const breakdown = {
   assert.equal(row.children[0].props.style.backgroundColor, '#1f9d63', 'dot carries the semantic colour')
   assert.equal(row.children[1].props.children, '对话', 'label survives')
   assert.equal(row.children[2].props.children, '≈122K · 86.5%', 'value survives')
-
-  const partial = sandbox.buildModel({ usage: { total: 10, calls: 3 }, breakdown: null })
-  assert.equal(sandbox.presentFacts(partial).length, 1, 'only reported counters become rows')
 
   // Regression: fact tiles are built with jsxs(type, props) — children passed as
   // a third argument are silently dropped, which rendered six blank tiles.
@@ -269,7 +254,13 @@ const breakdown = {
   assert.ok(String(label.props.className).includes('bg-(--ui-surface-background)'))
   const approx = sandbox.presentCumulative({ cumulativeTotal: 482000, cumulativeInput: 479000, cumulativeOutput: 2300, cumulativeApprox: true })
   assert.equal(approx.kind, 'approx')
-  assert.equal(approx.value, '≈ 482K')
+  // The centre figure is what the arcs can account for (input + output); the
+  // rest of Hermes' total is carried separately so the card cannot contradict
+  // itself, which was the reported bug.
+  assert.equal(approx.value, '\u2248 481K', 'centre is input + output, not the Hermes total')
+  assert.equal(approx.io, 481300)
+  assert.equal(approx.other, 700, 'remainder of total tokens is explicit')
+  assert.equal(approx.full, '\u2248 482K', 'the Hermes total is still reported')
   assert.equal(approx.hint, undefined, 'hints are localized in the panel, not baked into the model')
   assert.equal(approx.input, 479000)
   assert.equal(approx.output, 2300)
@@ -279,8 +270,18 @@ const breakdown = {
   assert.equal(empty.input, null)
   const live = sandbox.presentCumulative({ cumulativeTotal: 254688, cumulativeInput: 125988, cumulativeOutput: 3132, cumulativeApprox: false })
   assert.equal(live.kind, 'live')
-  assert.equal(live.value, '255K')
+  assert.equal(live.value, '129K', 'centre is input + output')
+  assert.equal(live.io, 129120)
+  assert.equal(live.other, 125568, 'the rest of the total is not silently dropped')
+  assert.equal(live.full, '255K')
   assert.equal(live.input, 125988)
+  // The donut arcs must cover the whole centre figure, otherwise the number in
+  // the middle cannot be reconciled with the colours around it.
+  const arcSegments = sandbox.inputOutputSegments({ input: 100, output: 20, other: 30 })
+  assert.equal(arcSegments.length, 3, 'remainder gets its own arc')
+  assert.equal(arcSegments.reduce((sum, seg) => sum + seg.value, 0), 150, 'arcs add up to the centre')
+  assert.equal(sandbox.inputOutputSegments({ input: 100, output: 20, other: 0 }).length, 2, 'no empty arc')
+
   // History is the expensive call: a tick-only refresh must not repeat it and
   // must keep the counts already read.
   let historyCalls = 0
