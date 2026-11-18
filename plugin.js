@@ -921,7 +921,21 @@ function ContextPanel() {
   return jsxs('div', {
     className: 'flex h-full flex-col gap-2 overflow-auto bg-(--ui-surface-background) p-3 text-(--ui-text-primary)',
     children: kids([
-      jsx('div', { key: 'head', className: 'text-sm font-semibold', children: t('title') }),
+      jsxs('div', {
+        key: 'head',
+        className: 'flex items-center gap-2',
+        children: [
+          jsx('span', { key: 'title', className: 'text-sm font-semibold', children: t('title') }),
+          jsx('button', {
+            key: 'refresh',
+            type: 'button',
+            disabled: snapshot.loading,
+            className: 'ml-auto min-h-7 shrink-0 rounded-md border border-(--ui-stroke-secondary) px-2 py-0.5 text-[0.6875rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
+            onClick: () => setRefreshKey(value => value + 1),
+            children: snapshot.loading ? t('refreshing') : t('refresh')
+          })
+        ]
+      }),
       jsx(Section, {
         key: 'p1',
         title: t('cumulativeTitle'),
@@ -1136,14 +1150,6 @@ function ContextPanel() {
         key: 'foot',
         className: 'flex items-center gap-2 pt-1',
         children: [
-          jsx('button', {
-            key: 'btn',
-            type: 'button',
-            disabled: snapshot.loading,
-            className: 'min-h-8 w-fit rounded-md border border-(--ui-stroke-secondary) px-2.5 py-1 text-[0.75rem] text-(--ui-text-secondary) enabled:hover:bg-(--ui-bg-tertiary) disabled:opacity-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
-            onClick: () => setRefreshKey(value => value + 1),
-            children: snapshot.loading ? t('refreshing') : t('refresh')
-          }),
           jsx('span', {
             key: 'age',
             className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
