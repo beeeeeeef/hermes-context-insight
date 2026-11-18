@@ -51,6 +51,7 @@ const MESSAGES = {
     notReadYet: 'Not read yet',
     session: id => `Session ${id}`,
     cumulativeTitle: 'Session total',
+    runScopeNote: 'Counted since this run started. Hermes rebuilds the agent on restart or after a context compression, and these counters restart with it.',
     totalTokens: 'Total tokens',
     uncachedInput: 'Uncached input',
     cacheReadLabel: 'Cache read',
@@ -107,6 +108,7 @@ const MESSAGES = {
     notReadYet: '尚未读取',
     session: id => `会话 ${id}`,
     cumulativeTitle: '会话累计',
+    runScopeNote: '自本次运行起累计。Hermes 在重启或压缩上下文后会重建 agent，这些计数也随之从零开始。',
     totalTokens: '累计 token',
     uncachedInput: '未缓存输入',
     cacheReadLabel: '缓存读取',
@@ -771,7 +773,8 @@ function ContextPanel() {
                   ? statRow(t('cacheReadLabel'), `${formatCount(cumulative.cacheRead)} tok`, 'read')
                   : null,
                 statRow(t('outputLabel'), `${formatCount(cumulative.output)} tok`, 'out'),
-                cumulativeHint ? jsx('div', { key: 'hint', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: cumulativeHint }) : null
+                cumulativeHint ? jsx('div', { key: 'hint', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: cumulativeHint }) : null,
+                jsx('div', { key: 'scope', className: 'mt-1 text-[0.6875rem] text-(--ui-text-quaternary)', children: t('runScopeNote') })
               ]
             })
           ]
