@@ -713,6 +713,12 @@ function ContextPanel() {
     cumulativeApprox,
     cumulativeParts: shown !== null ? shown.cumulativeParts : null
   })
+  // One cache figure for the whole panel: the live split when the stats read gave
+  // us one, otherwise the usage mirror. Mixing the two showed 0% in one card and a
+  // stale 68% in the other.
+  const cacheRate = cumulative.cacheHitPct !== null && cumulative.cacheHitPct !== undefined
+    ? cumulative.cacheHitPct
+    : (shown !== null && shown.cacheHitPct !== null ? Math.round(shown.cacheHitPct * 10) / 10 : null)
   const bars = compositionBars(shown, t)
   const updatedSeconds = snapshot.at > 0 ? Math.max(0, Math.round((now - snapshot.at) / 1000)) : null
   const cumulativeHint = cumulative.kind === 'empty'
@@ -882,14 +888,14 @@ function ContextPanel() {
         summary: t('timingSummary',
           shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)),
           shown !== null && shown.avgLatencyS !== null ? `${shown.avgLatencyS}s` : '—',
-          shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—'),
+          cacheRate !== null ? `${cacheRate}%` : '—'),
         children: jsx('div', {
           className: 'grid grid-cols-2 gap-1.5',
           children: kids([
             tile(t('totalElapsed'), shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), 'elapsed'),
             tile(t('latencyLabel'), shown === null || shown.avgLatencyS === null ? '—' : `${shown.avgLatencyS}s`, 'latency'),
             tile(t('modelCallsLabel'), shown !== null && shown.calls !== null ? formatCount(shown.calls) : '—', 'calls'),
-            tile(t('cacheLabel'), shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—', 'cache'),
+            tile(t('cacheLabel'), cacheRate !== null ? `${cacheRate}%` : '—', 'cache'),
             tile(t('compressionsLabel'), shown !== null && shown.compressions !== null ? formatCount(shown.compressions) : '—', 'compressions'),
             tile(t('tpsLabel'), shown !== null && shown.avgTps !== null ? `${Math.round(shown.avgTps * 10) / 10} tok/s` : '—', 'tps')
           ])
