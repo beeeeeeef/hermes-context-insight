@@ -20,15 +20,13 @@ Four cards, in the order the numbers matter:
 2. **Current window** — measured occupancy over a model-property window: the
    percentage ring, the used/capacity figure, the free remainder, an occupancy bar
    and the per-category composition.
-3. **Items by category** — counts per category, expandable. Only *conversation*
-   has a real count (from `session.history`); the other categories report tokens
-   without counts, so they say so instead of inventing a number.
-4. **Timing** — natural elapsed time, recorded gaps between history rows, model
-   calls, cache hit rate, compressions and throughput.
+3. **Timing** — natural elapsed time, average latency, model calls, cache hit rate,
+   compressions and throughput. Collapsed to one summary line by default.
 
-Expanding **conversation** lists the recorded messages. Expanding **system prompt**
-shows the full prompt when the last `session.info` event carried it; otherwise it
-says it has not been captured for this session.
+The item-count card was removed: only *conversation* has a countable row set, and
+the other categories expose tokens without counts, so the card was mostly "count
+not exposed". Removing it also removed the `session.history` read, which was the
+expensive call in every refresh.
 
 ### Estimates versus measurements
 
@@ -48,8 +46,6 @@ The plugin reads Hermes Desktop's public SDK state and three read-only gateway c
 | `session.context_breakdown` | current occupancy and estimated categories |
 | `session.active_list` | the session's natural start time |
 | `session.stats` | cumulative input/output/cache counters |
-| `session.history` | conversation counts, message list, recorded gaps |
-| `session.info` (event) | the system prompt, only when Hermes pushes one |
 | `host.listPersistedSessions` | cold-start fallback for persisted `input_tokens` + `output_tokens` |
 
 It does **not** write files, make external network requests, or access a database directly. The cold-start fallback goes through the public SDK, which reads the persisted session row on the host; it is labelled approximate because it is not the same aggregate as live `usage.total` (cache, reasoning and compression lineage can differ). State stays in memory.
@@ -67,10 +63,6 @@ It does **not** write files, make external network requests, or access a databas
 - Without a window size the occupancy bar is withheld entirely: any fill would
   claim an occupancy nobody measured. The window is taken from the breakdown, and
   from `focusedUsage.context_max` when the breakdown has not been computed yet.
-- The conversation list shows the first 120 records, clipped to 160 characters
-  each, and says so when the session has more.
-- `session.info` is an event, not a query: the system prompt is only available
-  after Hermes pushes one (model switch, new session, and similar).
 
 ## Troubleshooting
 

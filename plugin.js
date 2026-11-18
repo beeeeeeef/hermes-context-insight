@@ -10,7 +10,7 @@
  * 只读：不写盘、不发起外部网络请求、不直接访问数据库；不改变会话内容。
  */
 import { atom, host, usePluginI18n, useValue } from '@hermes/plugin-sdk'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'hermes-context-insight'
@@ -45,7 +45,6 @@ const MESSAGES = {
     refreshing: 'Refreshing…',
     awaitingUsage: 'Awaiting live usage',
     persistedHint: (input, output) => `Persisted in ${input} + out ${output}; exact total unavailable after restart`,
-    ioHint: (input, output) => `in ${input} · out ${output}`,
     freeHint: (free, max) => `${free} tokens free of ${max}`,
     updatedJustNow: 'Updated just now',
     updatedAgo: seconds => `Updated ${seconds}s ago`,
@@ -56,17 +55,10 @@ const MESSAGES = {
     uncachedInput: 'Uncached input',
     cacheReadLabel: 'Cache read',
     outputLabel: 'Output',
-    itemsTitle: 'Items by category',
-    items: n => `${n} items`,
-    countUnavailable: 'count not exposed',
-    historyCounts: (u, a, tool) => `${u} user · ${a} assistant · ${tool} tool rows`,
-    historyUnavailable: 'History unavailable; item counts need session.history.',
     elapsedTitle: 'Timing',
     totalElapsed: 'Elapsed',
-    recordGaps: 'Record gaps',
-    gapMean: 'avg',
-    gapHint: 'Interval between two consecutive history records. It spans tool execution plus whatever came after it, so it is not the tool\'s own runtime.',
-    timingSummary: (elapsed, gaps, cache) => `${elapsed} · gaps ${gaps} · cache ${cache}`,
+    latencyLabel: 'Avg latency',
+    timingSummary: (elapsed, latency, cache) => `${elapsed} · ${latency} · cache ${cache}`,
     modelCallsLabel: 'Model calls',
     cacheLabel: 'Cache hit',
     compressionsLabel: 'Compressions',
@@ -82,12 +74,6 @@ const MESSAGES = {
     estimateNote: 'Category figures are estimates.',
     deltaHigher: v => `Estimate runs ${v} above the measured usage`,
     deltaLower: v => `Estimate runs ${v} below the measured usage`,
-    expand: 'Show detail',
-    collapse: 'Hide detail',
-    noMessages: 'No messages recorded yet.',
-    listTruncated: (shown, total) => `Showing the first ${shown} of ${total} records.`,
-    promptUnavailable: 'Not captured for this session yet — it arrives with a session update.',
-    promptCaptured: 'Captured from the last session update.',
     noSession: 'No active session',
     openChat: 'Open a chat to see its context.'
   },
@@ -115,7 +101,6 @@ const MESSAGES = {
     refreshing: '刷新中…',
     awaitingUsage: '等待实时用量',
     persistedHint: (input, output) => `来自已保存记录：输入 ${input} + 输出 ${output}；重启后拿不到精确总量`,
-    ioHint: (input, output) => `输入 ${input} · 输出 ${output}`,
     freeHint: (free, max) => `共 ${max}，剩余 ${free}`,
     updatedJustNow: '刚刚更新',
     updatedAgo: seconds => `${seconds} 秒前更新`,
@@ -126,17 +111,10 @@ const MESSAGES = {
     uncachedInput: '未缓存输入',
     cacheReadLabel: '缓存读取',
     outputLabel: '输出',
-    itemsTitle: '逐项条数',
-    items: n => `${n} 项`,
-    countUnavailable: '条数未暴露',
-    historyCounts: (u, a, tool) => `用户 ${u} · 助手 ${a} · 工具 ${tool} 条`,
-    historyUnavailable: '历史不可用，条数需要 session.history。',
     elapsedTitle: '耗时',
     totalElapsed: '总历时',
-    recordGaps: '记录间隔',
-    gapMean: '平均',
-    gapHint: '相邻两条历史记录之间的间隔，包含工具执行以及其后的所有等待，因此不等于工具本身的运行时长。',
-    timingSummary: (elapsed, gaps, cache) => `${elapsed} · 间隔 ${gaps} · 缓存 ${cache}`,
+    latencyLabel: '平均延迟',
+    timingSummary: (elapsed, latency, cache) => `${elapsed} · ${latency} · 缓存 ${cache}`,
     modelCallsLabel: '模型调用',
     cacheLabel: '缓存命中',
     compressionsLabel: '压缩次数',
@@ -152,12 +130,6 @@ const MESSAGES = {
     estimateNote: '分类数值为估算。',
     deltaHigher: v => `估算比实测高 ${v}`,
     deltaLower: v => `估算比实测低 ${v}`,
-    expand: '展开明细',
-    collapse: '收起明细',
-    noMessages: '还没有记录到消息。',
-    listTruncated: (shown, total) => `仅显示前 ${shown} 条，共 ${total} 条。`,
-    promptUnavailable: '本次会话暂未获取；它只在会话信息更新时带出来。',
-    promptCaptured: '来自最近一次会话信息更新。',
     noSession: '没有活跃会话',
     openChat: '打开一个对话后即可查看上下文。'
   }
@@ -166,13 +138,6 @@ const MESSAGES = {
 const $snapshot = atom({ sessionId: null, profile: null, data: null, loading: false, error: '', at: 0 })
 const $tick = atom(0)
 
-/**
- * Opportunistic capture, keyed by runtime session id. `session.info` is the only
- * place the full system prompt ever crosses into the renderer, and it is an
- * EVENT — the plugin cannot ask for it. So it is cached when it happens to
- * arrive and honestly reported as absent otherwise.
- */
-const $systemPrompts = atom({})
 
 /** 分类估算合计：只作为分类占比的分母。 */
 function sumCategories(categories) {
@@ -340,67 +305,6 @@ function legendRow(item, index, t) {
   }
 }
 
-/** Bounded, display-only view of the conversation. Text is truncated, never
- *  rewritten; the panel shows what the session actually recorded. */
-function summariseMessages(rows, limit = 120, clip = 160) {
-  const out = []
-  for (const row of rows) {
-    if (out.length >= limit) break
-    const role = row && typeof row.role === 'string' ? row.role : 'unknown'
-    const at = finiteNumber(row?.timestamp)
-    let text = ''
-    if (typeof row?.text === 'string') text = row.text
-    else if (typeof row?.content === 'string') text = row.content
-    else if (role === 'tool') {
-      const name = typeof row?.name === 'string' ? row.name : 'tool'
-      text = name
-    }
-    text = text.replace(/\s+/g, ' ').trim()
-    if (text.length > clip) text = `${text.slice(0, clip)}…`
-    out.push({ role, at, text })
-  }
-  return out
-}
-
-/** Counts history rows by role; the only per-item numbers the plugin can see. */
-function countHistory(rows) {
-  const counts = { user: 0, assistant: 0, tool: 0, messages: 0, total: rows.length }
-  for (const row of rows) {
-    const role = row && typeof row.role === 'string' ? row.role : ''
-    if (role === 'user') counts.user += 1
-    else if (role === 'assistant') counts.assistant += 1
-    else if (role === 'tool') counts.tool += 1
-    if (role === 'user' || role === 'assistant') counts.messages += 1
-  }
-  return counts
-}
-
-/** Intervals between consecutive history timestamps. History tool rows carry no
- *  duration, so a gap spans more than the tool: it is a record interval. */
-function timelineGaps(rows) {
-  const gaps = []
-  let previous = null
-  for (const row of rows) {
-    const at = finiteNumber(row?.timestamp)
-    if (at === null) continue
-    if (previous !== null && at >= previous) gaps.push(at - previous)
-    previous = at
-  }
-  return gaps
-}
-
-/** Mean and max of recorded gaps, in seconds. */
-function gapStats(gaps) {
-  if (!Array.isArray(gaps) || gaps.length === 0) return { count: 0, mean: null, max: null }
-  let total = 0
-  let max = 0
-  for (const seconds of gaps) {
-    total += seconds
-    if (seconds > max) max = seconds
-  }
-  return { count: gaps.length, mean: total / gaps.length, max }
-}
-
 /** Proportional arcs for the cumulative input/output split. */
 function Donut({ segments, centerValue, centerLabel }) {
   const radius = 26
@@ -463,17 +367,6 @@ function tile(label, value, key, hint) {
   })
 }
 
-/** Seconds as a compact duration. */
-function formatDuration(seconds) {
-  const value = finiteNumber(seconds)
-  if (value === null) return '—'
-  if (value < 1) return '<1s'
-  if (value < 60) return `${Math.round(value)}s`
-  const minutes = Math.floor(value / 60)
-  const rest = Math.round(value % 60)
-  if (minutes < 60) return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-}
 
 /** Input/output arcs for the cumulative donut. */
 function inputOutputSegments(cumulative) {
@@ -517,47 +410,6 @@ function categoryLabel(item, t) {
     if (localised && localised !== key) return localised
   }
   return item?.id ?? ''
-}
-
-/**
- * Detail body for one category row, or null when this category has no detail
- * the plugin can honestly show. Conversation comes from session.history; the
- * system prompt is whatever the last `session.info` event carried.
- */
-function categoryDetail(item, model, systemPrompt, t) {
-  if (!item || !model) return null
-  if (item.id === 'conversation') {
-    const messages = Array.isArray(model.messages) ? model.messages : []
-    if (messages.length === 0) return { nodes: [jsx('div', { key: 'n', children: t('noMessages') })] }
-    const total = model.counts ? model.counts.total : messages.length
-    const truncated = total > messages.length
-      ? [jsx('div', { key: 'more', className: 'text-(--ui-text-quaternary)', children: t('listTruncated', formatCount(messages.length), formatCount(total)) })]
-      : []
-    return {
-      nodes: messages.map((message, index) => jsxs('div', {
-        key: `m${index}`,
-        className: 'flex gap-1.5',
-        children: [
-          jsx('span', { key: 'r', className: 'w-14 shrink-0 text-(--ui-text-quaternary)', children: message.role }),
-          jsx('span', { key: 'x', className: 'min-w-0 break-words', children: message.text || '—' })
-        ]
-      })).concat(truncated)
-    }
-  }
-  if (item.id === 'system_prompt') {
-    if (!systemPrompt) return { nodes: [jsx('div', { key: 'n', children: t('promptUnavailable') })] }
-    return {
-      nodes: [
-        jsx('div', { key: 'note', className: 'text-(--ui-text-quaternary)', children: t('promptCaptured') }),
-        jsx('pre', {
-          key: 'text',
-          className: 'm-0 whitespace-pre-wrap break-words font-mono text-[0.6875rem]',
-          children: systemPrompt
-        })
-      ]
-    }
-  }
-  return null
 }
 
 function Section({ title, subtitle, children, className, collapsible, open, onToggle, summary }) {
@@ -623,7 +475,7 @@ function OccupancyRing({ percent, label }) {
  * 读取当前聚焦会话的两个只读接口，并归一为面板模型。
  * 任一接口失败都保留其余数据，不把失败解释为零。
  */
-async function loadSessionModel({ request, sessionId, storedSessionId, profile, usage, now, listPersistedSessions, includeHistory = true, previous = null }) {
+async function loadSessionModel({ request, sessionId, storedSessionId, profile, usage, now, listPersistedSessions }) {
   const result = {
     cumulativeTotal: finiteNumber(usage?.total),
     cumulativeInput: finiteNumber(usage?.input),
@@ -650,21 +502,15 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     avgTps: finiteNumber(usage?.avg_tps),
     avgLatencyS: finiteNumber(usage?.avg_latency_s),
     freeTokens: null,
-    counts: null,
-    gaps: [],
     estimateDelta: null,
-    messages: [],
     cumulativeParts: null
   }
   if (!sessionId) return result
 
   const params = { session_id: sessionId, profile }
-  const [breakdownResult, activeResult, historyResult, statsResult] = await Promise.all([
+  const [breakdownResult, activeResult, statsResult] = await Promise.all([
     request('session.context_breakdown', params).then(value => ({ ok: true, value }), () => ({ ok: false })),
     request('session.active_list', { profile }).then(value => ({ ok: true, value }), () => ({ ok: false })),
-    includeHistory
-      ? request('session.history', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
-      : Promise.resolve({ ok: false, skipped: true }),
     // session.stats is the only read that exposes the cache counters as absolute
     // numbers; focusedUsage reduces them to a percentage.
     request('session.stats', params).then(value => ({ ok: true, value }), () => ({ ok: false }))
@@ -699,33 +545,6 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     result.freeTokens = model.freeTokens
   } else {
     result.breakdownError = 'Context breakdown unavailable.'
-  }
-
-  // Item counts: only conversation is countable from here. The other categories
-  // live inside the agent and report tokens without counts, so they stay null.
-  if (!includeHistory && previous) {
-    // A tick-only refresh: history is the expensive call, so the previously
-    // read counts stand until the user refreshes or switches session.
-    result.counts = previous.counts ?? null
-    result.gaps = Array.isArray(previous.gaps) ? previous.gaps : []
-    result.messages = Array.isArray(previous.messages) ? previous.messages : []
-    result.categories = result.categories.map(item => ({
-      ...item,
-      count: item.id === 'conversation' && result.counts ? result.counts.messages : null
-    }))
-  }
-  const historyRows = historyResult.ok && Array.isArray(historyResult.value?.messages)
-    ? historyResult.value.messages
-    : null
-  if (historyRows !== null) {
-    const counts = countHistory(historyRows)
-    result.counts = counts
-    result.gaps = timelineGaps(historyRows)
-    result.categories = result.categories.map(item => ({
-      ...item,
-      count: item.id === 'conversation' ? counts.messages : null
-    }))
-    result.messages = summariseMessages(historyRows)
   }
 
   // How far the category ESTIMATE drifts from the measured occupancy. The two
@@ -840,13 +659,7 @@ function ContextPanel() {
   const snapshot = useValue($snapshot)
   const tick = useValue($tick)
   const [refreshKey, setRefreshKey] = useState(0)
-  const [openCategory, setOpenCategory] = useState(null)
   const [openTiming, setOpenTiming] = useState(false)
-  // History is refetched only when the session changes or the user refreshes;
-  // a message completing keeps the counts already read.
-  const historyEpoch = useRef('')
-  const systemPrompts = useValue($systemPrompts)
-  const systemPrompt = sessionId ? (systemPrompts[sessionId] ?? null) : null
   const [now, setNow] = useState(() => Date.now())
   const usageModel = buildModel({ usage })
 
@@ -858,9 +671,6 @@ function ContextPanel() {
     let cancelled = false
     const previous = $snapshot.get()
     const sameSession = previous.sessionId === sessionId && previous.profile === profile
-    const epoch = `${sessionId}|${profile}|${refreshKey}`
-    const includeHistory = historyEpoch.current !== epoch
-    if (includeHistory) historyEpoch.current = epoch
     $snapshot.set({ ...previous, sessionId, profile, data: sameSession ? previous.data : null, loading: true, error: '' })
     loadSessionModel({
       request: host.request,
@@ -869,8 +679,6 @@ function ContextPanel() {
       profile,
       usage,
       now: Date.now(),
-      includeHistory,
-      previous: sameSession ? previous.data : null,
       listPersistedSessions: typeof host.listPersistedSessions === 'function' ? host.listPersistedSessions.bind(host) : undefined
     })
       .then(data => {
@@ -908,8 +716,8 @@ function ContextPanel() {
   const cumulativeHint = cumulative.kind === 'empty'
     ? t('awaitingUsage')
     : cumulative.kind === 'approx'
-      ? t('persistedHint', formatTokens(cumulative.input), formatTokens(cumulative.output))
-      : cumulative.input === null ? '' : t('ioHint', formatTokens(cumulative.input), formatTokens(cumulative.output))
+      ? t('persistedHint', formatTokens(cumulative.uncached), formatTokens(cumulative.output))
+      : ''
 
   if (!sessionId) {
     return jsxs('div', { className: 'flex h-full flex-col items-center justify-center gap-2 bg-(--ui-surface-background) px-4 text-center', children: kids([
@@ -1062,68 +870,6 @@ function ContextPanel() {
           ]
         })
       }),
-      shown !== null && shown.categories.length > 0
-        ? jsx(Section, {
-            key: 'p3',
-            title: t('itemsTitle'),
-            children: [
-              jsx('div', {
-                key: 'rows',
-                className: 'flex flex-col gap-1',
-                children: shown.categories.map((item, index) => {
-                  const open = openCategory === item.id
-                  const detail = categoryDetail(item, shown, systemPrompt, t)
-                  const cells = [
-                    jsx('span', {
-                      key: 'caret',
-                      'aria-hidden': true,
-                      className: 'w-3 shrink-0 text-[0.6875rem] text-(--ui-text-tertiary)',
-                      children: detail ? (open ? '▾' : '▸') : ''
-                    }),
-                    jsx('span', { key: 'dot', 'aria-hidden': true, className: 'mt-1 size-2 shrink-0 rounded-sm', style: { backgroundColor: categoryColor(item.id, index) } }),
-                    jsx('span', { key: 'name', className: 'min-w-0 break-words text-(--ui-text-secondary)', children: categoryLabel(item, t) }),
-                    jsx('span', {
-                      key: 'count',
-                      className: 'ml-auto shrink-0 tabular-nums ' + (typeof item.count === 'number' ? 'text-(--ui-text-tertiary)' : 'italic text-(--ui-text-quaternary)'),
-                      children: typeof item.count === 'number' ? t('items', formatCount(item.count)) : t('countUnavailable')
-                    })
-                  ]
-                  return jsxs('div', {
-                    key: item.id,
-                    className: 'flex flex-col gap-1',
-                    children: [
-                      detail
-                        ? jsx('button', {
-                            key: 'head',
-                            type: 'button',
-                            'aria-expanded': open,
-                            'aria-label': `${open ? t('collapse') : t('expand')} ${categoryLabel(item, t)}`,
-                            className: 'flex w-full items-baseline gap-2 rounded-sm text-left text-[0.75rem] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--ui-accent)',
-                            onClick: () => setOpenCategory(current => (current === item.id ? null : item.id)),
-                            children: cells
-                          })
-                        : jsx('div', { key: 'head', className: 'flex items-baseline gap-2 text-[0.75rem]', children: cells }),
-                      detail && open
-                        ? jsx('div', {
-                            key: 'body',
-                            className: 'ml-5 flex max-h-56 flex-col gap-1 overflow-auto rounded-md bg-(--ui-bg-tertiary) p-2 text-[0.6875rem] text-(--ui-text-secondary)',
-                            children: detail.nodes
-                          })
-                        : null
-                    ]
-                  })
-                })
-              }),
-              jsx('div', {
-                key: 'hist',
-                className: 'mt-1 text-[0.6875rem] text-(--ui-text-tertiary)',
-                children: shown.counts !== null
-                  ? t('historyCounts', formatCount(shown.counts.user), formatCount(shown.counts.assistant), formatCount(shown.counts.tool))
-                  : t('historyUnavailable')
-              })
-            ]
-          })
-        : null,
       jsx(Section, {
         key: 'p4',
         title: t('elapsedTitle'),
@@ -1132,13 +878,13 @@ function ContextPanel() {
         onToggle: () => setOpenTiming(value => !value),
         summary: t('timingSummary',
           shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)),
-          shown === null || shown.gaps.length === 0 ? '—' : formatDuration(gapStats(shown.gaps).mean),
+          shown !== null && shown.avgLatencyS !== null ? `${shown.avgLatencyS}s` : '—',
           shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—'),
         children: jsx('div', {
           className: 'grid grid-cols-2 gap-1.5',
           children: kids([
             tile(t('totalElapsed'), shown === null || !shown.elapsedKnown ? '—' : formatElapsed(elapsedAt(shown, snapshot.at, now)), 'elapsed'),
-            tile(t('recordGaps'), shown === null || shown.gaps.length === 0 ? '—' : `${t('gapMean')} ${formatDuration(gapStats(shown.gaps).mean)}`, 'gaps', t('gapHint')),
+            tile(t('latencyLabel'), shown === null || shown.avgLatencyS === null ? '—' : `${shown.avgLatencyS}s`, 'latency'),
             tile(t('modelCallsLabel'), shown !== null && shown.calls !== null ? formatCount(shown.calls) : '—', 'calls'),
             tile(t('cacheLabel'), shown !== null && shown.cacheHitPct !== null ? `${Math.round(shown.cacheHitPct * 10) / 10}%` : '—', 'cache'),
             tile(t('compressionsLabel'), shown !== null && shown.compressions !== null ? formatCount(shown.compressions) : '—', 'compressions'),
@@ -1180,15 +926,6 @@ export default {
   defaultEnabled: true,
   register(ctx) {
     ctx.i18n?.register?.(MESSAGES)
-    ctx.onEvent('session.info', event => {
-      const sessionId = event?.session_id
-      const prompt = event?.payload?.system_prompt
-      if (!sessionId || typeof prompt !== 'string' || !prompt) return
-      const current = $systemPrompts.get()
-      if (current[sessionId] === prompt) return
-      // Keep only the focused session so a long run cannot accumulate prompts.
-      $systemPrompts.set({ [sessionId]: prompt })
-    })
     ctx.onEvent('message.complete', event => {
       if (event?.session_id !== host.state.focusedSessionId.get()) return
       $tick.set($tick.get() + 1)

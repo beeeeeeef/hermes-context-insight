@@ -294,49 +294,31 @@ const breakdown = {
   assert.equal(arcs.length, 2, 'two arcs only')
   assert.equal(arcs.reduce((sum, seg) => sum + seg.value, 0), 497558375, 'arcs add up to the centre')
 
-  // History is the expensive call: a tick-only refresh must not repeat it and
-  // must keep the counts already read.
-  let historyCalls = 0
-  const countingRequest = async method => {
-    if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 91000 }] }
-    if (method === 'session.active_list') return { sessions: [] }
-    if (method === 'session.history') { historyCalls += 1; return { messages: [{ role: 'user', timestamp: 1, text: 'hi' }] } }
-    throw new Error(method)
-  }
-  const firstLoad = await sandbox.loadSessionModel({ request: countingRequest, sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now() })
-  assert.equal(historyCalls, 1, 'first load reads history')
-  const tickLoad = await sandbox.loadSessionModel({ request: countingRequest, sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now(), includeHistory: false, previous: firstLoad })
-  assert.equal(historyCalls, 1, 'a tick refresh must not call session.history again')
-  assert.equal(tickLoad.counts.messages, 1, 'previous counts survive the tick refresh')
-  assert.equal(tickLoad.messages.length, 1, 'previous message list survives the tick refresh')
-
-  // The timing card is collapsible, and the gap tile explains itself on hover
-  // instead of relying on a label the reader has to decode.
+  // A tile can carry a hover explanation instead of a label the reader has to
+  // decode.
   const hintedTile = sandbox.tile('L', 'V', 'k', 'HINT')
   assert.equal(hintedTile.props.children[1].props.title, 'HINT')
+
+  // No history read at all: the item-count card is gone, so the loader must not
+  // pay for the full transcript on any refresh.
+  const touched = []
+  await sandbox.loadSessionModel({
+    request: async method => { touched.push(method); return method === 'session.context_breakdown' ? { context_used: 1, context_max: 10, categories: [] } : { sessions: [] } },
+    sessionId: 'runtime-1', profile: 'tech', usage: null, now: Date.now()
+  })
+  assert.ok(!touched.includes('session.history'), 'the loader no longer reads the transcript')
 
   // Estimate vs measurement: the gap is reported rather than hidden.
   const gap = await sandbox.loadSessionModel({
     request: async method => {
       if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 106000 }] }
       if (method === 'session.active_list') return { sessions: [] }
-      if (method === 'session.history') return { messages: [{ role: 'user', timestamp: 1, text: 'hi' }] }
       throw new Error(method)
     },
     sessionId: 'runtime-1', profile: 'tech', usage: { total: 1 }, now: Date.now()
   })
   assert.equal(gap.estimateDelta, 9000, 'estimate drift is surfaced as a number')
-  assert.equal(gap.messages.length, 1, 'the conversation is summarised for the detail view')
-  assert.equal(gap.messages[0].role, 'user')
 
-  // Detail bodies: conversation lists real rows, the system prompt is honest
-  // about being absent, and categories with no detail expose none at all.
-  const detailModel = { messages: [{ role: 'user', at: 1, text: '你好' }] }
-  const identT = key => key
-  assert.ok(sandbox.categoryDetail({ id: 'conversation' }, detailModel, null, identT).nodes.length === 1)
-  assert.equal(sandbox.categoryDetail({ id: 'system_prompt' }, detailModel, null, identT).nodes[0].props.children, 'promptUnavailable')
-  assert.equal(sandbox.categoryDetail({ id: 'system_prompt' }, detailModel, '# Soul', identT).nodes.length, 2)
-  assert.equal(sandbox.categoryDetail({ id: 'tool_definitions' }, detailModel, null, identT), null)
 
   // Window length is a model property: when the breakdown reports 0 (no agent
   // built yet) the usage snapshot may still know it, and that is legitimate.
@@ -344,7 +326,6 @@ const breakdown = {
     request: async method => {
       if (method === 'session.context_breakdown') return { context_used: 0, context_max: 0, categories: [{ id: 'conversation', label: '对话', tokens: 110000 }] }
       if (method === 'session.active_list') return { sessions: [] }
-      if (method === 'session.history') return { messages: [] }
       throw new Error(method)
     },
     sessionId: 'runtime-1',
