@@ -30,7 +30,6 @@ const MESSAGES = {
     ofWindow: 'of window',
     free: 'free',
     barWindowAria: 'Estimated share of the context window',
-    barWindow: 'Top bar = occupancy of the window. Grey = unclassified and free.',
     barNoWindow: 'Window size unavailable, so no occupancy bar is drawn — the list below is composition only.',
     stateEstimated: 'estimated',
     reading: 'Reading context…',
@@ -40,7 +39,6 @@ const MESSAGES = {
     classified: 'Classified estimate',
     coverage: pct => `≈${pct}% of window`,
     occupancyUnavailable: 'occupancy unavailable',
-    greyNote: 'Grey is content the breakdown did not attribute.',
     refresh: 'Refresh',
     refreshing: 'Refreshing…',
     awaitingUsage: 'Awaiting live usage',
@@ -74,8 +72,6 @@ const MESSAGES = {
     catRules: 'Rules',
     catMcp: 'MCP tools',
     estimateNote: 'Category figures are estimates.',
-    deltaHigher: v => `Estimate runs ${v} above the measured usage`,
-    deltaLower: v => `Estimate runs ${v} below the measured usage`,
     noSession: 'No active session',
     openChat: 'Open a chat to see its context.'
   },
@@ -88,7 +84,6 @@ const MESSAGES = {
     ofWindow: '占窗口',
     free: '剩余',
     barWindowAria: '窗口占用比例的估算',
-    barWindow: '上方彩条 = 窗口占用比例；灰色为未分类与空闲部分。',
     barNoWindow: '窗口容量未知，因此不绘制占用彩条；下方仅为构成明细。',
     stateEstimated: '估算',
     reading: '正在读取上下文…',
@@ -98,7 +93,6 @@ const MESSAGES = {
     classified: '分类合计约',
     coverage: pct => `约占窗口 ${pct}%`,
     occupancyUnavailable: '占用未知',
-    greyNote: '灰色部分为未能归类的内容。',
     refresh: '刷新',
     refreshing: '刷新中…',
     awaitingUsage: '等待实时用量',
@@ -132,8 +126,6 @@ const MESSAGES = {
     catRules: '规则',
     catMcp: 'MCP 工具',
     estimateNote: '分类数值为估算。',
-    deltaHigher: v => `估算比实测高 ${v}`,
-    deltaLower: v => `估算比实测低 ${v}`,
     noSession: '没有活跃会话',
     openChat: '打开一个对话后即可查看上下文。'
   }
@@ -521,7 +513,6 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     avgTps: finiteNumber(usage?.avg_tps),
     avgLatencyS: finiteNumber(usage?.avg_latency_s),
     freeTokens: null,
-    estimateDelta: null,
     cumulativeParts: null,
     persistedInput: null,
     persistedOutput: null
@@ -566,12 +557,6 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     result.freeTokens = model.freeTokens
   } else {
     result.breakdownError = 'Context breakdown unavailable.'
-  }
-
-  // How far the category ESTIMATE drifts from the measured occupancy. The two
-  // are different measurements, so the honest presentation is the gap itself.
-  if (result.contextUsed !== null && result.categoryTotal > 0) {
-    result.estimateDelta = result.categoryTotal - result.contextUsed
   }
 
   if (activeResult.ok) {
@@ -863,11 +848,11 @@ function ContextPanel() {
             shown !== null && shown.categories.length > 0 && (bars === null || bars.windowBar === null)
               ? jsx('div', { key: 'track', className: 'h-2.5 w-full rounded-full bg-(--ui-stroke-secondary)' })
               : null,
-            shown !== null && shown.categories.length > 0
+            shown !== null && shown.categories.length > 0 && (bars === null || bars.windowBar === null)
               ? jsx('div', {
                   key: 'barnote',
                   className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
-                  children: bars === null || bars.windowBar === null ? t('barNoWindow') : t('barWindow')
+                  children: t('barNoWindow')
                 })
               : null,
             shown !== null && shown.categories.length > 0
@@ -879,24 +864,12 @@ function ContextPanel() {
                     : `${t('classified')} ${formatTokens(shown.categoryTotal)} · ${t('coverage', Math.round((shown.categoryTotal / shown.contextMax) * 1000) / 10)} · ${t('estimateNote')}`
                 })
               : null,
-            shown !== null && typeof shown.estimateDelta === 'number' && shown.estimateDelta !== 0
-              ? jsx('div', {
-                  key: 'delta',
-                  className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
-                  children: shown.estimateDelta > 0
-                    ? t('deltaHigher', formatTokens(shown.estimateDelta))
-                    : t('deltaLower', formatTokens(-shown.estimateDelta))
-                })
-              : null,
             shown !== null && shown.categories.length > 0
               ? jsx('div', {
                   key: 'legend',
                   className: 'grid grid-cols-2 gap-x-3 gap-y-1.5',
                   children: shown.categories.map((item, index) => jsx('div', legendRow(item, index, t), item.id))
                 })
-              : null,
-            shown !== null && shown.categories.length > 0
-              ? jsx('div', { key: 'greynote', className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: t('greyNote') })
               : null,
             shown === null
               ? jsx('div', { key: 'state', className: 'text-[0.75rem] text-(--ui-text-secondary)', children: snapshot.loading ? t('reading') : t('contextUnavailable') })

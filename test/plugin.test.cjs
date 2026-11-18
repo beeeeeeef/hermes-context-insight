@@ -308,7 +308,8 @@ const breakdown = {
   })
   assert.ok(!touched.includes('session.history'), 'the loader no longer reads the transcript')
 
-  // Estimate vs measurement: the gap is reported rather than hidden.
+  // Estimate and measurement stay separate figures: the card no longer prints
+  // their difference, but neither is folded into the other.
   const gap = await sandbox.loadSessionModel({
     request: async method => {
       if (method === 'session.context_breakdown') return { context_used: 97000, context_max: 1050000, categories: [{ id: 'conversation', label: '对话', tokens: 106000 }] }
@@ -317,7 +318,8 @@ const breakdown = {
     },
     sessionId: 'runtime-1', profile: 'tech', usage: { total: 1 }, now: Date.now()
   })
-  assert.equal(gap.estimateDelta, 9000, 'estimate drift is surfaced as a number')
+  assert.equal(gap.contextUsed, 97000, 'measured occupancy is kept')
+  assert.equal(gap.categoryTotal, 106000, 'the estimate is kept as its own figure')
 
 
   // The persisted row is read on every refresh: it survives agent rebuilds while
