@@ -1,3 +1,5 @@
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 # hermes-context-insight
 
 A read-only Hermes Desktop plugin that shows the current chat's context usage.
