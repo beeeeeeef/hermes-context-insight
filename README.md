@@ -17,6 +17,9 @@ Four cards, in the order the numbers matter:
    uncached input, cache read and output. Every number on this card comes from
    that one RPC, so the arcs and the legend cannot disagree. Cache write is folded
    into the input arc rather than given its own slice.
+   A second line shows the persisted session row (`input_tokens + output_tokens`)
+   when it covers more than this run does, so a rebuilt agent cannot look like the
+   session shrank. That row has no cache fields, so it can never supply the split.
 2. **Current window** — measured occupancy over a model-property window: the
    percentage ring, the used/capacity figure, the free remainder, an occupancy bar
    and the per-category composition.

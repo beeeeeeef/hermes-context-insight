@@ -320,6 +320,27 @@ const breakdown = {
   assert.equal(gap.estimateDelta, 9000, 'estimate drift is surfaced as a number')
 
 
+  // The persisted row is read on every refresh: it survives agent rebuilds while
+  // the live counters do not, so the card can show both scopes.
+  const withRow = await sandbox.loadSessionModel({
+    request: async method => {
+      if (method === 'session.context_breakdown') return { context_used: 124000, context_max: 1000000, categories: [] }
+      if (method === 'session.active_list') return { sessions: [] }
+      if (method === 'session.stats') return { input_tokens: 123493, output_tokens: 160, cache_read_tokens: 0, cache_write_tokens: 0 }
+      throw new Error(method)
+    },
+    sessionId: 'runtime-1', storedSessionId: 'stored-1', profile: 'tech',
+    usage: { total: 123653 },
+    listPersistedSessions: async () => ({ sessions: [{ id: 'stored-1', input_tokens: 479509, output_tokens: 25950 }] }),
+    now: Date.now()
+  })
+  assert.equal(withRow.persistedInput, 479509)
+  assert.equal(withRow.persistedOutput, 25950)
+  const history = sandbox.historicalTotal(withRow, 123653)
+  assert.equal(history.total, 505459, 'persisted total is surfaced')
+  assert.equal(sandbox.historicalTotal(withRow, 505459), null, 'hidden when this run already covers it')
+  assert.equal(sandbox.historicalTotal({ persistedInput: null }, 1), null, 'absent row hides the line')
+
   // Window length is a model property: when the breakdown reports 0 (no agent
   // built yet) the usage snapshot may still know it, and that is legitimate.
   const fallback = await sandbox.loadSessionModel({

@@ -51,6 +51,7 @@ const MESSAGES = {
     notReadYet: 'Not read yet',
     session: id => `Session ${id}`,
     cumulativeTitle: 'Session total',
+    historyLine: (total, input, output) => `Session total ≈ ${total} (input ${input} + output ${output}, including usage before this run) with no cache split`,
     runScopeNote: 'Counted since this run started. Hermes rebuilds the agent on restart or after a context compression, and these counters restart with it.',
     totalTokens: 'Total tokens',
     uncachedInput: 'Uncached input',
@@ -108,6 +109,7 @@ const MESSAGES = {
     notReadYet: '尚未读取',
     session: id => `会话 ${id}`,
     cumulativeTitle: '会话累计',
+    historyLine: (total, input, output) => `本会话累计 ≈ ${total}（输入 ${input} + 输出 ${output}，含本次运行之前的用量）无缓存拆分`,
     runScopeNote: '自本次运行起累计。Hermes 在重启或压缩上下文后会重建 agent，这些计数也随之从零开始。',
     totalTokens: '累计 token',
     uncachedInput: '未缓存输入',
@@ -414,6 +416,21 @@ function categoryLabel(item, t) {
   return item?.id ?? ''
 }
 
+/**
+ * The persisted session total, when it covers more than this run does. Shown
+ * beside the live split so a rebuilt agent cannot look like the session shrank;
+ * never used to claim a cache figure, which the row does not carry.
+ */
+function historicalTotal(shown, liveTotal) {
+  if (!shown) return null
+  const input = finiteNumber(shown.persistedInput)
+  const output = finiteNumber(shown.persistedOutput)
+  if (input === null || output === null) return null
+  const total = input + output
+  if (liveTotal !== null && liveTotal !== undefined && total <= liveTotal * 1.02) return null
+  return { total, input, output }
+}
+
 function Section({ title, subtitle, children, className, collapsible, open, onToggle, summary }) {
   const headerCells = kids([
     jsx('h3', { key: 't', className: 'text-[0.8125rem] font-medium text-(--ui-text-primary)', children: title }),
@@ -505,7 +522,9 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     avgLatencyS: finiteNumber(usage?.avg_latency_s),
     freeTokens: null,
     estimateDelta: null,
-    cumulativeParts: null
+    cumulativeParts: null,
+    persistedInput: null,
+    persistedOutput: null
   }
   if (!sessionId) return result
 
@@ -568,13 +587,11 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
     result.activeListError = 'Session start time unavailable.'
   }
 
-  // Cold start: the live usage atom and agentless stats have no counters yet.
-  // A persisted session row still holds input/output, but it is not the same
-  // aggregate as usage.total (cache, reasoning and compression lineage differ),
-  // so this path is always labelled approximate in the UI.
-  // A cold-start usage object can arrive with a zeroed total rather than null.
-  // Only a zero with no persisted counters is treated as a real empty session.
-  if ((result.cumulativeTotal === null || result.cumulativeTotal === 0) && storedSessionId && profile && typeof listPersistedSessions === 'function') {
+  // The persisted session row accumulates across agent rebuilds (a restart, or
+  // the compression that evicts the agent) while `usage.total` restarts at zero.
+  // It is read on every refresh and reported beside the live split. SessionInfo
+  // carries input and output only, so it can never supply the cache split.
+  if (storedSessionId && profile && typeof listPersistedSessions === 'function') {
     try {
       const page = await listPersistedSessions(null, { profile, limit: 500 })
       const rows = Array.isArray(page?.sessions) ? page.sessions : []
@@ -584,11 +601,17 @@ async function loadSessionModel({ request, sessionId, storedSessionId, profile, 
       const input = finiteNumber(row?.input_tokens)
       const output = finiteNumber(row?.output_tokens)
       if (input !== null && output !== null && (input > 0 || output > 0)) {
-        result.cumulativeInput = input
-        result.cumulativeOutput = output
-        result.cumulativeTotal = input + output
-        result.cumulativeApprox = true
-        result.cumulativeSource = 'persisted'
+        result.persistedInput = input
+        result.persistedOutput = output
+        // Cold start: no live counters at all, so the row is also the best
+        // available cumulative figure. A zeroed usage object counts as none.
+        if (result.cumulativeTotal === null || result.cumulativeTotal === 0) {
+          result.cumulativeInput = input
+          result.cumulativeOutput = output
+          result.cumulativeTotal = input + output
+          result.cumulativeApprox = true
+          result.cumulativeSource = 'persisted'
+        }
       }
     } catch {
       // Keep the honest unavailable state; never turn a failed lookup into zero.
@@ -716,6 +739,7 @@ function ContextPanel() {
   // One cache figure for the whole panel: the live split when the stats read gave
   // us one, otherwise the usage mirror. Mixing the two showed 0% in one card and a
   // stale 68% in the other.
+  const history = historicalTotal(shown, cumulative.total)
   const cacheRate = cumulative.cacheHitPct !== null && cumulative.cacheHitPct !== undefined
     ? cumulative.cacheHitPct
     : (shown !== null && shown.cacheHitPct !== null ? Math.round(shown.cacheHitPct * 10) / 10 : null)
@@ -780,6 +804,13 @@ function ContextPanel() {
                   : null,
                 statRow(t('outputLabel'), `${formatCount(cumulative.output)} tok`, 'out'),
                 cumulativeHint ? jsx('div', { key: 'hint', className: 'mt-0.5 text-[0.6875rem] text-(--ui-text-tertiary)', children: cumulativeHint }) : null,
+                history !== null
+                  ? jsx('div', {
+                      key: 'history',
+                      className: 'mt-1 text-[0.6875rem] text-(--ui-text-tertiary)',
+                      children: t('historyLine', formatTokens(history.total), formatTokens(history.input), formatTokens(history.output))
+                    })
+                  : null,
                 jsx('div', { key: 'scope', className: 'mt-1 text-[0.6875rem] text-(--ui-text-quaternary)', children: t('runScopeNote') })
               ]
             })
